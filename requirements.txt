@@ -1,16 +1,23 @@
-# SAMS dependencies. Unpinned during development; pinned at task T12 from
-# `pip freeze` so the marker gets the exact versions we tested against.
+# SAMS dependencies, pinned at task T12 from the environment the prototype was
+# tested in: Python 3.13 on Arch based Linux.
 #
 # Install into a virtual environment. Do not pip install into the system Python
 # on Arch — it is externally managed.
+#
+#   python -m venv .venv
+#   source .venv/bin/activate.fish
+#   pip install -r requirements.txt
+#
+# opencv-python rather than opencv-python-headless: cv2.imshow has to be
+# available even though Matplotlib is what actually draws the step images.
 
-opencv-python
-numpy
-scikit-image
-scipy
-matplotlib
-seaborn
-pandas
-scikit-learn
-pytest
-Pillow
+opencv-python==5.0.0.93
+numpy==2.5.1
+scikit-image==0.26.0
+scipy==1.18.0
+matplotlib==3.11.1
+seaborn==0.13.2
+pandas==3.0.5
+scikit-learn==1.9.0
+pytest==9.1.1
+Pillow==12.3.0
