@@ -12,10 +12,14 @@ them, which is why it can serve all nine modules.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
+import cv2
 import numpy as np
 
+from src import config
 from src.utils.logging import get_logger
 
 log = get_logger("progress")
@@ -42,18 +46,32 @@ class ProgressViewer:
         sheet_date: Identifies the run. Used as the output folder name.
         show: Whether the montage is allowed to open a window.
         save: Whether step images are allowed to be written to disk.
+        steps_root: Where ``<sheet_date>/`` is created. Defaults to
+            ``outputs/steps``; tests point it at a temporary folder.
     """
 
-    def __init__(self, sheet_date: str, show: bool = True, save: bool = True) -> None:
+    def __init__(
+        self,
+        sheet_date: str,
+        show: bool = True,
+        save: bool = True,
+        steps_root: Path | None = None,
+    ) -> None:
         self.sheet_date = sheet_date
         self.show = show
         self.save = save
+        self.steps_root = Path(steps_root) if steps_root is not None else config.STEPS
         self._steps: list[Step] = []
 
     @property
     def steps(self) -> list[Step]:
         """The steps collected so far, in insertion order."""
         return list(self._steps)
+
+    @property
+    def output_dir(self) -> Path:
+        """Folder this run's step images are written to."""
+        return self.steps_root / self.sheet_date
 
     def __len__(self) -> int:
         return len(self._steps)
@@ -93,3 +111,86 @@ class ProgressViewer:
         """Register every figure a stage produced, preserving its order."""
         for name, image in figures.items():
             self.add(name, image)
+
+    # -- saving ------------------------------------------------------------
+
+    def save_all(self) -> list[Path]:
+        """Write every step to ``outputs/steps/<date>/NN_name.png``.
+
+        Files are numbered from ``01`` in the order the steps were added, so
+        the folder reads top to bottom as the journey of the photo and can be
+        pasted straight into the report.
+
+        Returns:
+            The paths written, in order. Empty when ``save`` is ``False``.
+        """
+        if not self.save:
+            log.debug("saving disabled, skipping %d steps", len(self._steps))
+            return []
+        if not self._steps:
+            log.warning("no steps to save for sheet %s", self.sheet_date)
+            return []
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for number, step in enumerate(self._steps, start=1):
+            path = self.output_dir / f"{number:02d}_{self._slug(step.name)}.png"
+            image = self._for_file(step.image)
+            if not cv2.imwrite(str(path), image):
+                raise OSError(f"could not write step image {path}")
+            written.append(path)
+            log.info(
+                "[%d/%d] %s … saved  %s",
+                number,
+                len(self._steps),
+                step.name,
+                path.name,
+            )
+        return written
+
+    @staticmethod
+    def _slug(name: str) -> str:
+        """Filename-safe version of a step label."""
+        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        return slug or "step"
+
+    @staticmethod
+    def _as_uint8(image: np.ndarray) -> np.ndarray:
+        """Convert any sensible array to ``uint8`` without changing what it shows.
+
+        Stages produce masks as ``bool``, distance maps as ``float`` in
+        ``[0, 1]`` and everything else as ``uint8``. The viewer accepts all
+        three rather than making eight other people remember to convert.
+        """
+        if image.dtype == np.uint8:
+            return image
+        if image.dtype == bool:
+            return (image.astype(np.uint8)) * 255
+        if np.issubdtype(image.dtype, np.floating):
+            finite = image[np.isfinite(image)]
+            top = float(finite.max()) if finite.size else 0.0
+            scale = 255.0 if top <= 1.0 else 1.0
+            return np.clip(np.nan_to_num(image) * scale, 0, 255).astype(np.uint8)
+        return np.clip(image, 0, 255).astype(np.uint8)
+
+    def _for_file(self, image: np.ndarray) -> np.ndarray:
+        """Downscale and normalise one step image for writing to disk.
+
+        Full size step images are 3024 x 4032. Eight of those per sheet is tens
+        of megabytes nobody looks at — in the report each one is a few inches
+        wide. They are written at :data:`src.config.STEP_IMAGE_MAX_WIDTH`.
+
+        Channel order is left exactly as it arrived, because ``cv2.imwrite``
+        expects BGR and that is what the stages produce.
+        """
+        prepared = self._as_uint8(image)
+        width = prepared.shape[1]
+        limit = config.STEP_IMAGE_MAX_WIDTH
+        if width > limit:
+            scale = limit / width
+            prepared = cv2.resize(
+                prepared,
+                (limit, max(1, int(round(prepared.shape[0] * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+        return prepared
