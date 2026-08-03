@@ -1230,6 +1230,225 @@ Confidence scales `ink_ratio` between `CONF_LOW` and `CONF_HIGH`, reduced near t
 
 ---
 
+## 9.8 M8 — Signature Recognition
+
+**Branch** `feat/m8-recognition` · **Owns** `src/recognise/preprocess_sig.py`, `src/recognise/features.py`, `src/recognise/matcher.py`, `src/recognise/report.py`, `tools/eval_recognition.py`, `tests/test_recognition.py`
+**Reads** M7's `signatures` table and M6's saved crops · **Drives** `investigate.py`
+
+The only part of the brief that explicitly promises higher grades: *"An attempt to distinguish the student signatures using any advanced library or self-created would result higher grades."* Treat it as the group's showcase. You are off the critical path, so you can work steadily — build against your own hand-cropped samples until M6 and M7 land.
+
+### The problem you must solve first
+
+Five sheets means **at most 5 samples per student and zero known forgeries**. You cannot train a model. The trick:
+
+- Student A's signatures compared with each other → **genuine pairs**
+- Student A's compared with B, C, D… → **impostor pairs**
+
+Two score distributions, a cut-off where they separate, and real numbers: False Accept Rate, False Reject Rate, Equal Error Rate. That turns "we picked 0.62" into an experiment. **This is where the bonus marks are.**
+
+### What T0 measured that changes your job
+
+- **Six students, five sheets, and not everyone signed every sheet.** Real sample counts: four students have 5, one has 4, one has 3 (see `data/ground_truth.csv`). So genuine pairs number about 40 in total. Small. Say so, and do not present the EER as though it came from thousands of pairs.
+- **`investigate.py` calls `matcher.investigate(index: str, save_only: bool) -> None`** — §6.5. Your brief shows `investigate(student_index, db)`; the CLI does not build a `Database`, so construct your own inside. Keep the brief's `InvestigationReport` if you like, but the entry point signature is fixed.
+- **Crops are at `outputs/cells/<sheet_date>/<index>.png`** with `<index>_mask.png` beside them (§9.6 T6). `investigate.py` counts those files to decide whether there is anything to compare, and stops cleanly with exit 0 when there are fewer than two.
+- **One student's signature genuinely varies a lot** — compare `10009306` across `31.05` and `12.07` by eye before you tune anything. If your threshold flags real variation as a mismatch, that is a finding, not a bug to hide.
+
+### Contract
+
+```python
+# src/recognise/preprocess_sig.py
+def normalise_signature(mask, size=(220, 120)) -> np.ndarray:
+    """Trim to ink, keep aspect, pad, centre by centre of mass, resize."""
+
+# src/recognise/features.py
+def hog_vector(norm) -> np.ndarray: ...
+def hu_moments(norm) -> np.ndarray: ...
+def orb_keypoints(norm): ...
+def shape_stats(norm) -> dict:
+    """Your own: ink density, aspect, stroke length, Euler number,
+    projection profiles, centre of mass, slant angle."""
+
+# src/recognise/matcher.py
+@dataclass
+class MatchScore:
+    ssim: float; hog: float; hu: float; orb: float
+    custom: float; combined: float
+    verdict: str              # "match" | "mismatch" | "uncertain"
+
+def compare(a, b) -> MatchScore: ...
+def investigate(index: str, save_only: bool = False) -> None:   # §6.5
+    """Load every sample, compare all pairs, print the table, flag the
+    outlier, save the figure. Never raises on too few samples."""
+```
+
+Every score comes out in 0–1 where 1 is identical. Distances need converting.
+
+`src/config.py` under `# --- M8 recognition ---`:
+
+```python
+SIG_NORM_SIZE = (220, 120)
+HOG_ORIENTATIONS, HOG_PPC, HOG_CPB = 9, (8, 8), (2, 2)
+SCORE_WEIGHTS = {"ssim": 0.30, "hog": 0.30, "hu": 0.10, "orb": 0.15, "custom": 0.15}
+MATCH_THRESHOLD = 0.62        # set from the EER experiment in T5, not guessed
+UNCERTAIN_BAND = 0.08
+USE_CNN_FEATURES = False
+```
+
+### Tasks
+
+**T1 — Collect samples.** `Database.get_signatures(index)`, skipping absences. Fewer than 2 → clear message, no crash.
+- `feat(recognise): load signature samples for a student from the database`
+- `fix(recognise): handle students with fewer than two samples`
+
+**T2 — Normalisation.** Nothing works without it: trim to ink → keep aspect → pad → centre by centre of mass → resize to `SIG_NORM_SIZE`. Use M4's `clean_signature_crop` rather than writing your own morphology.
+- `feat(recognise): trim signature masks to the ink bounding box`
+- `feat(recognise): centre signatures by centre of mass`
+- `feat(recognise): resize to fixed box keeping aspect ratio`
+
+**T3 — The five features.** SSIM (`skimage.metrics`), HOG + cosine (`skimage.feature`), Hu moments log-scaled (`cv2.HuMoments`), ORB + Lowe ratio test, and `shape_stats` — **your own, in plain NumPy**.
+- `feat(recognise): add ssim similarity between normalised signatures`
+- `feat(recognise): add hog descriptor with cosine similarity`
+- `feat(recognise): add hu moment shape comparison`
+- `feat(recognise): add orb keypoint matching with lowe ratio test`
+- `feat(recognise): add custom shape statistics feature set`
+- `feat(recognise): add projection profile correlation to custom score`
+- `refactor(recognise): normalise all scores to a zero to one range`
+
+**T4 — Combine.** Weighted sum from `SCORE_WEIGHTS`; above `MATCH_THRESHOLD` is a match, below by more than `UNCERTAIN_BAND` is a mismatch, between is uncertain.
+- `feat(recognise): combine individual scores into one weighted score`
+- `feat(recognise): add match, mismatch and uncertain verdicts`
+
+**T5 — Genuine vs impostor (the bonus marks).** `tools/eval_recognition.py`: build both pair sets, plot both distributions on one axis, sweep the threshold, compute FAR/FRR, find the EER, set `MATCH_THRESHOLD` from it, and report which single feature separates best — that justifies your weights.
+- `feat(eval): build genuine and impostor score pairs from all students`
+- `feat(eval): plot score distributions for both pair types`
+- `feat(eval): compute far, frr and equal error rate across thresholds`
+- `fix(recognise): set match threshold from measured equal error rate`
+- `docs(recognise): record which features separate genuine pairs best`
+
+**T6 — Outlier inside one student.** Pairwise similarity matrix, mean similarity per sample, flag the lowest with its sheet date.
+- `feat(recognise): build pairwise similarity matrix per student`
+- `feat(recognise): flag the sample least similar to the rest`
+
+**T7 — Output.** `python investigate.py 10000409` prints a pairwise table and a verdict:
+```
+Student 10000409 — M S Dilshanika Perera — 5 samples
+
+  pair                      SSIM   HOG    HU     ORB    OWN    COMBINED
+  31.05 vs 21.06            0.81   0.88   0.92   0.79   0.84     0.84  match
+  31.05 vs 28.06            0.78   0.85   0.90   0.74   0.80     0.81  match
+  21.06 vs 12.07            0.41   0.39   0.55   0.22   0.35     0.38  MISMATCH
+
+Verdict: signature on 12.07.2019 does not match the others (mean 0.39 vs 0.82).
+Flagged for manual review.
+Figures saved to outputs/figures/m8_investigate_10000409.png
+```
+- `feat(recognise): print pairwise score table for investigate command`
+- `feat(recognise): print final verdict with the flagged sheet date`
+
+**T8 — Optional tier 3, only after T1–T7 work.** Pretrained ResNet18 embedding behind `USE_CNN_FEATURES`. **No training, and no Siamese network** — not enough data, not enough time. If it is slow or unhelpful, switch it off and report that honestly. A measured negative result still earns marks.
+- `feat(recognise): add optional pretrained cnn embedding features`
+- `docs(recognise): report cnn embedding results and runtime cost`
+
+**Verify:** `python investigate.py 10000409` prints a table and a verdict; `python investigate.py 10009302` (fewer samples) exits 0 with a clear message; `compare(x, x)` scores near 1.0.
+
+**Figures:** `m8_normalisation_steps.png`, `m8_score_distributions.png` (**genuine vs impostor with the threshold line — your headline figure**), `m8_far_frr_curve.png`, `m8_similarity_matrix.png`, `m8_orb_matches.png`, `m8_feature_comparison.png`, `m8_flagged_example.png`
+
+---
+
+## 9.9 M9 — Visualisation & QA
+
+**Branch** `feat/m9-viz-qa` · **Owns** `src/viz/charts.py`, `src/viz/style.py`, `tools/run_all_sheets.py`, `tools/make_report_assets.py`, `tests/test_charts.py`, `tests/test_e2e.py`
+**Reads** M7's database · **Drives** `infovis.py` · **Also** the group's QA
+
+Data visualisation is one of the module's **two named key technologies**. This module is judged on more than "it drew a bar chart". `src/viz/progress.py` is M1's — do not touch it.
+
+### What T0 measured that changes your job
+
+- **6 students × 5 sheets = 30 cells.** Your heat map is 6 rows by 5 columns. That is small, which is a gift: every cell can carry a label, and the whole class fits on one readable figure. Design for that rather than for a 200-student grid.
+- **Dates must sort chronologically, not as strings.** `05.07.2019` sorts before `21.06.2019` alphabetically and after it in reality. Parse `DD.MM.YYYY` before sorting, everywhere.
+- **Attendance is high** — most students are present on most sheets. A histogram of attendance percentage will be a spike near 100%. Say so, and choose charts that still communicate: the timeline and the heat map carry the story here, the distribution histogram does not. Choosing the right chart *and explaining why* is the marked skill.
+- **`infovis.py` calls `charts.show_student(index, save_only)` and `charts.show_all(save_only)`** — §6.5, module-level functions. Your brief describes an `AttendanceCharts` class; keep it, and have the two functions wrap it.
+- **`data/ground_truth.csv` already exists** with 30 labelled rows and a `note` column. Your accuracy report reads it directly.
+
+### Contract
+
+```python
+# src/viz/style.py
+def apply_house_style() -> None: ...
+COLOURS = {"present": "#2E7D32", "absent": "#C62828", "uncertain": "#F9A825"}
+
+# src/viz/charts.py
+class AttendanceCharts:
+    def __init__(self, db: Database): ...
+    def student_timeline(self, index: str) -> Figure: ...
+    def student_summary(self, index: str) -> Figure: ...
+    def student_dashboard(self, index: str) -> Figure: ...
+    def class_heatmap(self) -> Figure: ...
+    def sheet_totals(self) -> Figure: ...
+    def attendance_distribution(self) -> Figure: ...
+    def save(self, fig: Figure, name: str) -> Path: ...
+
+def show_student(index: str, save_only: bool = False) -> None: ...   # §6.5
+def show_all(save_only: bool = False) -> None: ...                   # §6.5
+```
+
+`save_only=True` writes to `outputs/charts/` and opens no window — needed so the whole prototype can run headless and in tests.
+
+`src/config.py` under `# --- M9 visualisation ---`:
+
+```python
+CHART_DPI = 150
+CHART_STYLE = "seaborn-v0_8-whitegrid"
+CHART_FIGSIZE = (11, 7)
+```
+
+### Tasks
+
+**T1 — House style first.** Consistent fonts, a colour-blind-safe palette, no chartjunk, no 3-D. Every chart in the project uses it; that consistency is itself worth marks. Red/green alone fails colour-blind readers — add shape or position as a second cue and say so.
+- `feat(viz): add shared chart style and colour palette`
+- `docs(viz): note colour choices and accessibility reasoning`
+
+**T2 — Student timeline.** Dates in chronological order on x, present/absent on y, step line with coloured markers, student name and index in the title.
+- `feat(viz): add per student attendance timeline chart`
+- `fix(viz): sort sheet dates chronologically not alphabetically`
+
+**T3 — Student summary.** Attendance percentage as a donut with `4 / 5` printed in the centre, **plus the class average for context**. A number without a comparison is not a visualisation.
+- `feat(viz): add attendance percentage donut chart`
+- `feat(viz): add class average reference to the summary chart`
+
+**T4 — The dashboard.** What `infovis.py 10000409` shows: `GridSpec`, four panels — timeline, donut, this student against the class, and a small table of date / present / confidence.
+- `feat(viz): add multi panel student dashboard with gridspec`
+- `feat(viz): add attendance details table panel`
+- `fix(viz): tighten layout so panels do not overlap`
+
+**T5 — Class-wide charts.** Heat map (6 students × 5 dates, cells labelled), present count per sheet, attendance distribution. **The heat map is the most useful chart a lecturer gets — make it the best one.**
+- `feat(viz): add class attendance heatmap`
+- `feat(viz): add present count per sheet bar chart`
+- `feat(viz): add attendance percentage distribution histogram`
+
+**T6 — Wire up `infovis.py` with M1.** Implement `show_student` and `show_all` to the §6.5 signatures. M1's CLI already handles argument parsing, the unknown-index message and the empty-database message — do not duplicate them.
+- `feat(viz): add show_student and show_all entry points for the cli`
+- `feat(viz): honour save-only by writing charts without opening a window`
+
+**T7 — End-to-end runner (QA).** `tools/run_all_sheets.py`: wipe the DB, run all five sheets, catch and report failures, print rows detected / students matched / time per sheet. **Run it after every merge into `main` and tell the group the same hour when it breaks.**
+- `feat(qa): add end to end runner for all five sheets`
+- `feat(qa): report per sheet timing and detected row counts`
+- `fix(qa): reset database before each full run`
+
+**T8 — Accuracy against ground truth, with M7.** Overall, per sheet, and **a list of every mistake with its student index and sheet date** so the group can open those exact cells. The two ink-but-absent cells will be in that list — name them.
+- `feat(qa): compute accuracy against ground truth per sheet`
+- `feat(qa): list individual misclassified cells for review`
+
+**T9 — Report asset generator (last).** `tools/make_report_assets.py` regenerates **every** figure in `outputs/` in one command, so a late parameter change does not mean re-taking screenshots by hand.
+- `feat(report): add single command to regenerate all report figures`
+- `docs(report): list every generated figure and its report section`
+
+**Verify:** `python infovis.py 10000409` shows and saves the dashboard; `python infovis.py --all` draws the class charts; `python tools/run_all_sheets.py` passes on all five sheets.
+
+**Figures:** `m9_dashboard_example.png`, `m9_class_heatmap.png`, `m9_attendance_distribution.png`, `m9_accuracy_report.png`, `m9_chart_type_choice.png` (**the same data as a pie, a bar and a timeline, showing why you chose what you chose — worth real marks in a visualisation module**)
+
+---
+
 ## 10. Error handling rules
 
 - User mistakes (missing file, bad index, empty database) → friendly one-line message, `sys.exit(2)`, **no traceback**.
