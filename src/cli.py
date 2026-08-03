@@ -125,6 +125,24 @@ def require_database() -> None:
         )
 
 
+def signature_samples(index: str) -> list[str]:
+    """Sheet dates on which a signature crop was saved for this student.
+
+    The crops live at ``outputs/cells/<sheet_date>/<index>.png`` — section 5.4
+    of the spec — so counting them needs no database and no other module.
+    ``investigate.py`` uses it to say *there is only one signature, there is
+    nothing to compare* before M8's matcher is even asked.
+    """
+    if not config.CELLS.is_dir():
+        return []
+    dates = [
+        folder.name
+        for folder in sorted(config.CELLS.iterdir())
+        if folder.is_dir() and (folder / f"{index}.png").is_file()
+    ]
+    return dates
+
+
 def resolve_index(index: str) -> str:
     """Check a student index against the ones we know, or stop helpfully.
 

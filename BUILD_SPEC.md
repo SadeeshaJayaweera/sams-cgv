@@ -402,6 +402,8 @@ usage: investigate.py [-h] [--save-only] index
 ```
 Fewer than 2 signature samples → clear message, exit 0 (not an error). Delegates to `src/recognise/matcher.py` (M8).
 
+A *signature sample* means a saved crop at `outputs/cells/<sheet_date>/<index>.png` (§5.4). Counting files needs no database and no other module, so `investigate.py` can give a straight answer before M7 or M8 exist.
+
 ---
 
 ## 8. Stub policy
