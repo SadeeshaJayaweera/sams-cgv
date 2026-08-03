@@ -13,6 +13,7 @@ The order is fixed by BUILD_SPEC.md section 6.3::
 from __future__ import annotations
 
 from src.models import SheetMeta, Student
+from src.utils import timing
 from src.utils.logging import get_logger
 from src.utils.stage import Stage
 from src.viz.progress import ProgressViewer
@@ -53,18 +54,35 @@ class Pipeline:
         Returns:
             The context dictionary, carrying every key the stages wrote. The
             keys are listed in BUILD_SPEC.md section 6.3.
+
+        Timings for every stage are recorded in :mod:`src.utils.timing` and
+        cleared first, so :func:`src.utils.timing.timings` describes this run
+        and not the last one.
         """
         ctx: dict = {"sheet": sheet, "students": students}
+        timing.reset()
         log.info("processing sheet %s  (%s)", sheet.date, sheet.path.name)
         log.info("stages: %s", " -> ".join(self.stage_names))
 
         for position, stage in enumerate(self.stages, start=1):
             log.info("[%d/%d] stage %r starting", position, len(self.stages), stage.name)
-            ctx = stage.run(ctx)
+            with timing.time_block(stage.name):
+                ctx = stage.run(ctx)
             self._collect_figures(stage)
             log.info("[%d/%d] stage %r done", position, len(self.stages), stage.name)
 
+        log.info("all %d stages finished in %.2f s", len(self.stages), timing.total())
         return ctx
+
+    @staticmethod
+    def timings() -> dict[str, float]:
+        """Seconds spent in each stage of the run that just finished."""
+        return timing.timings()
+
+    @staticmethod
+    def duration() -> float:
+        """Total seconds across every stage of the run that just finished."""
+        return timing.total()
 
     def _collect_figures(self, stage: Stage) -> None:
         """Hand a stage's pictures to the viewer, if there is one.
