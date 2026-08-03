@@ -1074,7 +1074,7 @@ PEN_HUE_RANGES = {
 - `fix(detect): lower saturation threshold for faded ink`
 - `docs(detect): record ink segmentation failure cases`
 
-**Verify:** the four genuinely empty cells (`28.06.2019` rows 2 and 3, `05.07.2019` row 2, and any blank you find) give near-zero `ink_ratio`; every real signature gives a clearly higher one.
+**Verify:** the **three** genuinely empty cells — `28.06.2019 / 10009301`, `28.06.2019 / 10009302`, `05.07.2019 / 10009301` — give near-zero `ink_ratio`, and every real signature gives a clearly higher one. The other two absences (`21.06.2019 / 10009306` and `05.07.2019 / 10009303`) **do** contain ink and must not be masked away; they are M7's problem, not yours.
 
 **Figures:** `m6_colour_spaces.png`, `m6_hue_scatter.png`, `m6_mask_panels.png`, `m6_border_removal.png`, `m6_pen_colour_counts.png`, `m6_empty_vs_signed.png`, `m6_ink_that_is_not_a_signature.png` (**the `ab` cell and the red tick beside a real signature, with all their features printed — this is the figure the discussion section needs**)
 
@@ -1248,7 +1248,7 @@ Two score distributions, a cut-off where they separate, and real numbers: False 
 
 ### What T0 measured that changes your job
 
-- **Six students, five sheets, and not everyone signed every sheet.** Real sample counts: four students have 5, one has 4, one has 3 (see `data/ground_truth.csv`). So genuine pairs number about 40 in total. Small. Say so, and do not present the EER as though it came from thousands of pairs.
+- **Six students, five sheets, and not everyone signed every sheet.** Counted from `data/ground_truth.csv`: two students have 5 samples, three have 4, one has 3 — **41 genuine pairs in total**. That is a small experiment. State the number in the report and do not present the EER as though it came from thousands of pairs.
 - **`investigate.py` calls `matcher.investigate(index: str, save_only: bool) -> None`** — §6.5. Your brief shows `investigate(student_index, db)`; the CLI does not build a `Database`, so construct your own inside. Keep the brief's `InvestigationReport` if you like, but the entry point signature is fixed.
 - **Crops are at `outputs/cells/<sheet_date>/<index>.png`** with `<index>_mask.png` beside them (§9.6 T6). `investigate.py` counts those files to decide whether there is anything to compare, and stops cleanly with exit 0 when there are fewer than two.
 - **One student's signature genuinely varies a lot** — compare `10009306` across `31.05` and `12.07` by eye before you tune anything. If your threshold flags real variation as a mismatch, that is a finding, not a bug to hide.
@@ -1349,7 +1349,7 @@ Figures saved to outputs/figures/m8_investigate_10000409.png
 - `feat(recognise): add optional pretrained cnn embedding features`
 - `docs(recognise): report cnn embedding results and runtime cost`
 
-**Verify:** `python investigate.py 10000409` prints a table and a verdict; `python investigate.py 10009302` (fewer samples) exits 0 with a clear message; `compare(x, x)` scores near 1.0.
+**Verify:** `python investigate.py 10000409` prints a table and a verdict for all 10 of its pairs; `compare(x, x)` scores near 1.0. Every student in this data has at least 3 samples, so the fewer-than-two path has no real case here — cover it with a unit test, not by hoping.
 
 **Figures:** `m8_normalisation_steps.png`, `m8_score_distributions.png` (**genuine vs impostor with the threshold line — your headline figure**), `m8_far_frr_curve.png`, `m8_similarity_matrix.png`, `m8_orb_matches.png`, `m8_feature_comparison.png`, `m8_flagged_example.png`
 
@@ -1458,46 +1458,135 @@ CHART_FIGSIZE = (11, 7)
 
 ---
 
-## 11. Tests M1 must write
+## 11. Tests each module must write
 
-`tests/test_pipeline.py`, with `matplotlib.use("Agg")` at the top:
+*"Testing results"* is named in the marking criteria, so this is not optional. Every test file starts with `matplotlib.use("Agg")` before any pyplot import — the suite must never try to open a window. Prefer small synthetic images over the real sheets: a test that needs a 3024 x 4032 photo is slow and tells you less.
 
+**M1 — `tests/test_pipeline.py`**
 1. Two fake stages append to a list — `Pipeline` runs them in the given order.
-2. A stage that raises → error message contains that stage's `name`.
+2. A stage that raises → the error message contains that stage's `name`.
 3. `ProgressViewer.save_all()` into `tmp_path` writes exactly N files, numbered from 01.
 4. `ProgressViewer.add()` accepts both a 3-channel and a 1-channel image.
 5. `sams.py` with a missing image exits with code 2 (use `subprocess`).
 6. `Student("007", "x").index == "007"` — leading zero survives.
 
+**M2 — `tests/test_geometry.py`**
+1. `load_image` raises `FileNotFoundError` on a bad path, `ValueError` on a non-image.
+2. A synthetic white rectangle on a dark background, rotated 7°, is corrected to within 1°.
+3. `four_point_warp` on a known quad gives the expected output size.
+4. Corner ordering returns top-left first for shuffled input points.
+5. The fallback path triggers on pure noise and does not crash.
+
+**M3 — `tests/test_enhance.py`**
+1. `to_grey` output is 2-D `uint8`, same height and width as the input.
+2. Luminosity of a pure red pixel `(0, 0, 255)` BGR is ≈ 76.
+3. `denoise` reduces variance on a synthetic noisy flat patch.
+4. `remove_shadow` on a linear brightness ramp reduces the left-half / right-half difference.
+5. An unknown method name raises `ValueError`.
+
+**M4 — `tests/test_binarize.py`**
+1. Output is strictly two-valued: `set(np.unique(out)) <= {0, 255}`.
+2. **Ink is 255** — a dark stroke on white paper comes out white.
+3. Hand-written Otsu on a clean two-peak image lands between the peaks and matches OpenCV within ±1.
+4. Opening removes isolated single pixels; closing fills a 1-pixel gap in a line.
+5. An even `block` value is corrected or raises a clear `ValueError`.
+
+**M5 — `tests/test_table.py`**
+1. A synthetic drawn grid: the detector finds exactly the lines that were drawn.
+2. With one horizontal line erased, grid repair restores it at the right position.
+3. `Grid.cell_bbox(0, 4)` returns the expected box for a known grid.
+4. Lines 3 px apart merge into one; lines 40 px apart do not.
+5. **Two stacked synthetic tables — the selector returns the taller lower one**, not the header.
+6. `crop_cell` output is smaller than the raw bbox by `2 * CELL_INSET` horizontally.
+
+**M6 — `tests/test_ink.py`**
+1. A synthetic white cell with a blue stroke: the mask covers it, `ink_ratio > 0`.
+2. A blank white cell: `ink_ratio` near zero, `components == 0`.
+3. A **black** stroke is detected — the low-saturation branch works.
+4. A **red** stroke is detected — hue wrap-around at 0/180 is handled.
+5. A **green** stroke is detected (no green pen exists in the real data, so this test is the only proof).
+6. A 4-pixel speck is removed by `MIN_BLOB_AREA`; a 200-pixel stroke is kept.
+7. `dominant_pen_colour` returns `"blue"` for a pure blue stroke.
+
+**M7 — `tests/test_decision.py` and `tests/test_db.py`**
+1. `decide` returns `True` for a high ink ratio, `False` for near zero.
+2. A value just below the threshold returns `False` with low confidence.
+3. Many tiny components with low stroke length is rejected — a smudge is not a signature.
+4. `init_schema` on a temp file creates all four tables.
+5. Saving the same sheet twice does not duplicate attendance rows.
+6. `get_attendance(index)` returns rows in **date** order, not string order.
+7. A SQL injection attempt in a student index changes nothing — proves parameterised queries.
+8. `parse_students` keeps `"10000409"` as a string, and finds all six students via `.//student`.
+
+**M8 — `tests/test_recognition.py`**
+1. `compare(x, x)` gives a combined score near 1.0.
+2. A signature against a blank image scores low.
+3. The same signature shifted 10 px still scores high — centring works.
+4. The same signature scaled 1.5× still scores high — scale normalisation works.
+5. `normalise_signature` always returns exactly `SIG_NORM_SIZE`.
+6. A student with 1 sample returns a clear "not enough samples" result, no exception.
+
+**M9 — `tests/test_charts.py` and `tests/test_e2e.py`**
+1. Each chart function returns a `matplotlib.figure.Figure`.
+2. A student with no records produces an empty-state chart, not a crash.
+3. Dates are ordered chronologically — assert `05.07.2019` comes **after** `21.06.2019`.
+4. `save()` writes a file of non-zero size.
+5. The full pipeline on one sheet writes the expected number of attendance rows.
+6. Running the same sheet twice leaves the row count unchanged.
+
+Run the whole suite from the repository root with `pytest -q`. It must pass on `main` at all times; if your merge breaks someone else's test, that is yours to fix.
+
 ---
 
 ## 12. Commit protocol
 
-- Branch: `feat/m1-core`. Merge into `main` via PR with a **merge commit or rebase — never squash**.
+- Branch: `feat/m<N>-<area>` — `feat/m1-core`, `feat/m2-geometry`, `feat/m3-enhance`, `feat/m4-binarize`, `feat/m5-table`, `feat/m6-ink`, `feat/m7-decision-db`, `feat/m8-recognition`, `feat/m9-viz-qa`.
+- Merge into `main` via PR with a **merge commit or rebase — never squash.** Squashing collapses your fifteen commits into one and erases the evidence of your individual contribution.
 - Message format: `type(scope): short lowercase summary`, types `feat | fix | refactor | test | docs | chore`.
-- One logical change per commit. Minimum 20 commits for M1 across the tasks above.
-- Author identity must be your own:
+- One logical change per commit. **Minimum 15 commits each, 20 for M1.** Push after each task, not in one batch at the end — a single dump on the last night is visible in the log and is worth close to nothing.
+- Author identity must be your own, set **before your first commit**:
   ```fish
-  git config user.name "T.R.D.T. Dulshan"
-  git config user.email "<your NSBM address>"
+  git config user.name "Your Full Name"
+  git config user.email "<your index>@students.nsbm.ac.lk"
   ```
 - Never force-push. Never rewrite shared history. `git log --author` is the evidence of individual contribution, which is 15% of the marks.
+- Nobody commits directly to `main` except M1, and only for integration.
 
 ---
 
-## 13. Definition of done for M1
+## 13. Definition of done
 
-- [ ] §4 input facts table filled in from real measurements
-- [ ] `python -c "import src"` works from a clean clone
-- [ ] All three commands run, with `--help`, and fail gracefully on bad input
-- [ ] `sams.py` produces the summary table and saves numbered step images
-- [ ] Montage window displays every processing step
-- [ ] All stubs deleted; `grep -r "STUB" src/` returns nothing
-- [ ] `pytest -q` passes
-- [ ] `README.md` complete, dependencies pinned, release tagged
-- [ ] `outputs/figures/m1_architecture.png`, `m1_montage_<date>.png`, `m1_timing.png` produced
-- [ ] 20+ commits with clear messages
-- [ ] `docs/contrib_m1.md` drafted
+**Every module, without exception:**
+
+- [ ] Your stage runs inside `sams.py` on **all five sheets** without crashing
+- [ ] Your tunables are in your own block in `src/config.py`, nothing hard-coded
+- [ ] `pytest -q` passes from the repository root
+- [ ] Your figures are in `outputs/figures/m<N>_*.png` at 150 dpi or better
+- [ ] 15+ commits on your branch with clear messages
+- [ ] `docs/contrib_m<N>.md` drafted — two pages, per the coursework brief
+
+**Plus, per module:**
+
+| | Also done when |
+|---|---|
+| **M1** | §4 facts measured and recorded · all three commands run with `--help` and fail gracefully · summary table and numbered step images produced · montage displays every step · `README.md` complete and dependencies pinned · **all stubs deleted, `grep -r "STUB" src/` returns nothing** · 20+ commits |
+| **M2** | all five sheets produce a straight, tightly cropped `warped` image with **both tables and all five columns intact** · nothing crashes when corners are not found · the path taken is logged per sheet |
+| **M3** | `grey` is evenly lit on all five sheets · shadow removal visibly helps at least one problem sheet · settings agreed with M4 **and** M5 and recorded in `config.py` |
+| **M4** | `binary` is two-valued with ink 255 on all five sheets · hand-written Otsu matches OpenCV within ±1 · **M5 confirms the table lines survive your morphology** |
+| **M5** | correct counts on all five sheets: **6 data rows, 5 columns** · the lecture header table is identified and discarded · `cells` gives M6 clean colour crops of the signature column · grid repair fixes at least one real missing line |
+| **M6** | blue, black, red and green ink all detected (green and black proven synthetically) · the three genuinely empty cells give near-zero ink ratio · crops and masks saved as `<index>.png` for M8 · feature key names agreed with M7 |
+| **M7** | all five sheets in the database with no duplicates on re-run · threshold set from a **sweep against `ground_truth.csv`**, not guessed · accuracy reported both including and excluding the two ink-but-absent cells · M8 and M9 can read from the database |
+| **M8** | `investigate.py <index>` works for every student · `MATCH_THRESHOLD` set from the measured EER, not guessed · shift and scale invariance tests pass · the 41-pair sample size stated honestly |
+| **M9** | `infovis.py <index>` shows and saves the dashboard · `--all` draws the class charts · `run_all_sheets.py` passes on all five · accuracy measured and **every** misclassified cell listed by index and date · `make_report_assets.py` regenerates everything in one command |
+
+**Group, before submission:**
+
+- [ ] `python tools/run_all_sheets.py` green on all five sheets
+- [ ] `grep -r "STUB" src/` returns nothing
+- [ ] `pytest -q` passes on a clean clone in a fresh venv
+- [ ] All nine `docs/contrib_m*.md` written
+- [ ] Report front page lists every member's name, role and index
+- [ ] `v1.0` tagged
 
 ---
 
