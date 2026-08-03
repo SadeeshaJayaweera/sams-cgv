@@ -182,6 +182,7 @@ sams-cgv/
 ├── tools/
 │   ├── inspect_inputs.py      # M1
 │   ├── make_fixtures.py       # M1
+│   ├── make_m1_figures.py     # M1 — the three figures in §13
 │   ├── seed_db.py             # M7
 │   ├── run_all_sheets.py      # M9
 │   └── make_report_assets.py  # M9
@@ -585,7 +586,9 @@ As each member merges, delete their stub from `src/stubs.py`, wire the real stag
 ---
 
 ### T12 — Freeze and package
-Fill `README.md`: what it is, install, the three commands, folder map, known limits. Pin versions in `requirements.txt` from `pip freeze`. Confirm `grep -r "STUB" src/` returns nothing. Tag.
+Fill `README.md`: what it is, install, the three commands, folder map, known limits. Pin versions in `requirements.txt` from `pip freeze`. Produce the three figures in §13 with `tools/make_m1_figures.py`. Confirm `grep -r "STUB" src/` returns nothing. Tag.
+
+**The `v1.0` tag is the group's, not M1's.** `src/stubs.py` cannot be empty until T11 has swapped in all seven real modules, so the STUB check cannot pass while M1 is the only work on `main`. M1 finishing tags `v0.1-m1-core` — everything M1 owns is done, the three commands run, the stubs are still standing in. `v1.0` waits for the last swap.
 
 **Verify:** a clean clone into a fresh venv runs all three commands.
 **Commits:**
