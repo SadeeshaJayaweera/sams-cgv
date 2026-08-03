@@ -65,6 +65,32 @@ def get_logger(name: str) -> _stdlib_logging.Logger:
     return _stdlib_logging.getLogger(f"{ROOT_LOGGER_NAME}.{name}")
 
 
+class WarningCollector(_stdlib_logging.Handler):
+    """Keeps every warning of a run so the final summary can repeat it.
+
+    A warning that scrolls past forty lines of INFO output has not been seen.
+    Section 10 of the spec says warnings that do not stop the run must appear
+    in the summary, and this is how they get there.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=_stdlib_logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: _stdlib_logging.LogRecord) -> None:
+        prefix = f"{ROOT_LOGGER_NAME}."
+        name = record.name
+        short = name[len(prefix):] if name.startswith(prefix) else name
+        self.messages.append(f"{short}: {record.getMessage()}")
+
+
+def collect_warnings() -> WarningCollector:
+    """Start capturing warnings, and return the collector holding them."""
+    collector = WarningCollector()
+    _configure_root().addHandler(collector)
+    return collector
+
+
 def set_debug(enabled: bool) -> None:
     """Turn DEBUG level output on or off for the whole project.
 
