@@ -32,6 +32,14 @@ python infovis.py 001
 python investigate.py 001
 ```
 
+The *shape* of those three commands is fixed. The arguments in them are the brief's illustration, not our data: T0 measured that our five sheets are dated `31.05.2019`, `21.06.2019`, `28.06.2019`, `05.07.2019`, `12.07.2019` and that student indices are 8 digits. The equivalent real invocations are:
+
+```bash
+python sams.py data/sheets/12.07.2019.png data/info.xml
+python infovis.py 10000409
+python investigate.py 10000409
+```
+
 M1 delivers: the repository skeleton, shared contracts, the pipeline runner, all three CLI programs, the step-by-step progress viewer, and stubs for every other module so the pipeline runs end to end from the first hour.
 
 ---
@@ -83,29 +91,46 @@ Notes:
 
 ## 4. Input data — verify before coding
 
-The five sheet photos and `info.xml` come from `CGV Signing Sheets.zip`.
+The five sheet photos come from `CGV Signing Sheets.zip`. They arrived as `1.jpeg` … `5.jpeg`, so T0 renamed each to the date printed on the sheet and converted it to lossless PNG:
 
-Place them as:
 ```
-data/sheets/<date>.png        # keep the original filenames from the zip
+data/sheets/31.05.2019.png    # was 1.jpeg
+data/sheets/21.06.2019.png    # was 2.jpeg
+data/sheets/28.06.2019.png    # was 3.jpeg
+data/sheets/05.07.2019.png    # was 4.jpeg
+data/sheets/12.07.2019.png    # was 5.jpeg
 data/info.xml
+data/ground_truth.csv         # transcribed by eye, used by M7 and M9 for accuracy
 ```
 
-**Task T0 below fills in this table. Do not guess these values — measure them.**
+`info.xml` was **not** in the material we received. It is reconstructed from Figure 1 of the brief plus the printed student table on the sheets — see the deviations below.
+
+**Measured facts (T0, `python tools/inspect_inputs.py`):**
 
 | Fact | Value | How to get it |
 |---|---|---|
-| Number of sheets | _TBD_ | `ls data/sheets` |
-| Image resolution (per sheet) | _TBD_ | `tools/inspect_inputs.py` |
-| Colour or greyscale photos | _TBD_ | channel check |
-| EXIF orientation present | _TBD_ | Pillow `_getexif()` |
-| Table columns on the sheet | _TBD_ | look at the image |
-| Data rows per sheet | _TBD_ | count by eye |
-| Header row present | _TBD_ | look |
-| `info.xml` root tag | _TBD_ | `head data/info.xml` |
-| `info.xml` student tag path | _TBD_ | read it |
-| Index format in XML | _TBD_ | e.g. `001` |
-| Do sheet rows match XML order? | _TBD_ | compare |
+| Number of sheets | 5 | `ls data/sheets` |
+| Image resolution (per sheet) | 3024 x 4032 portrait, all five identical | `tools/inspect_inputs.py` |
+| Colour or greyscale photos | Colour, 3 channel uint8 RGB (iPhone 7, iOS 12.1.4) | channel check |
+| EXIF orientation present | No — tag 274 absent, pixels already upright | Pillow `_getexif()` |
+| Table columns on the sheet | **5** — `No`, `Student No`, `Title`, `Student Name`, `Signature` | look at the image |
+| Data rows per sheet | 6 on every sheet | count by eye |
+| Header row present | Yes, one, printed in bold | look |
+| `info.xml` root tag | `nsbm` | `head data/info.xml` |
+| `info.xml` student tag path | `nsbm/students/batches/batch/student` with `index`, `title`, `name` | read it |
+| Index format in XML | 8 digits, e.g. `10000409` — not `001` | inspection report |
+| Do sheet rows match XML order? | Yes — the XML was transcribed in sheet row order | compare |
+
+**Deviations from the assumptions this spec was written under. Every one of these is load-bearing:**
+
+1. **The signature column is index 4, not 3.** The sheet has a `Title` column (`Mr` / `Ms`) between the student number and the name. `SIGNATURE_COL = 4` in §6.4, and `Cell.col` in §6.1 means `0=No, 1=Student No, 2=Title, 3=Student Name, 4=Signature`.
+2. **There are two tables on each sheet.** A one-row lecture header table (`Date | time | Lecture's Name | Signatue`) sits directly above the student table. M5 must take the **lower, taller** table and ignore the header table, otherwise the lecturer's own signature is read as a student's.
+3. **Indices are 8 digits, not 3.** They are still strings — `"10000409"` — and `infovis.py 001` from the brief has no matching student in our data. The CLIs accept any index string and report unknown ones helpfully.
+4. **The brief's `info.xml` is not well-formed.** Figure 1 shows `<15>` as the batch element. XML tag names may not start with a digit, so no standard parser will read that document. We carry the batch as `<batch year="2016.1">`. M7's parser should locate students with `.//student` so it survives either shape.
+5. **`info.xml` carries a `<title>` element** per student, matching the sheet's Title column. Figure 1 has only `index` and `name`.
+6. **Signature strokes routinely cross cell borders.** On `31.05.2019` and `05.07.2019` a signature spills a long way into the row below. M5's cells and M6's ink masks cannot assume a signature is contained by its box.
+7. **Ink is not always a signature.** On `21.06.2019` the last cell holds the lecturer's handwritten `ab` (absent); on `05.07.2019` one cell holds a stray red pen tick. Both are ink and both mean *absent*. Pure ink-ratio thresholding gets these wrong — this is exactly the discussion M7's decision stage must handle and the report must cover.
+8. **Six students, five sheets = 30 records** in total. Small enough that the summary table in §7 shows single digit counts, not the 42 in the illustration.
 
 Once measured, **replace the TBDs in this file and commit** before writing pipeline code. M5 and M7 depend on these answers.
 
@@ -198,7 +223,7 @@ class SheetMeta:
 @dataclass
 class Cell:
     row: int                                # 0 = first DATA row, header excluded
-    col: int                                # 0=#, 1=index, 2=name, 3=signature
+    col: int                                # 0=No, 1=index, 2=title, 3=name, 4=signature
     bbox: tuple[int, int, int, int]         # x, y, w, h in the warped image
     image: np.ndarray | None = None         # BGR crop
     student_index: str | None = None
@@ -282,7 +307,7 @@ FIGURES = OUTPUTS / "figures"
 DB_PATH = DATA / "attendance.db"
 INFO_XML = DATA / "info.xml"
 
-SIGNATURE_COL = 3
+SIGNATURE_COL = 4          # measured in T0: the sheet has a Title column
 SAVE_STEPS = True
 SHOW_PROGRESS = True
 FIGURE_DPI = 150
@@ -601,7 +626,9 @@ Fill `README.md`: what it is, install, the three commands, folder map, known lim
 
 ## 14. Open questions
 
-1. Group size is 9, brief asks for 10 — confirm with Dr. Ranaweera.
-2. Real `info.xml` tag structure — resolve in T0 and update §4 and §6.
-3. Whether sheet row order matches XML student order — resolve in T0; if not, M7 needs OCR of the index column rather than positional mapping.
-4. Whether any sheet is greyscale rather than colour — if so, M6's saturation approach needs the darkness branch as the primary path for that sheet.
+1. Group size is 9, brief asks for 10 — confirm with Dr. Ranaweera. **Open.**
+2. ~~Real `info.xml` tag structure~~ — **resolved in T0.** The file was never supplied. It is reconstructed as `nsbm/students/batches/batch/student` with `index`, `title`, `name`. If the real file later appears, re-run T0 and update §4 rather than patching the parser.
+3. ~~Whether sheet row order matches XML student order~~ — **resolved in T0.** They match, because the XML was transcribed from the sheets in row order. Positional mapping is therefore safe for the prototype; M7 should still warn when the row count and the student count disagree (§10).
+4. ~~Whether any sheet is greyscale~~ — **resolved in T0.** All five are 3 channel colour with real colour content. M6 keeps saturation as the primary path.
+5. **New, open:** the two sheets where a signature spills into the neighbouring row (§4 deviation 6) may need M5 to pad cells vertically and M6 to attribute a stroke to the row that holds most of it. M5 and M6 to agree an approach.
+6. **New, open:** `ab` written in a signature cell (§4 deviation 7) is ink that means absent. Decide with M7 whether the decision stage handles it by stroke shape or whether it is documented as a known limitation.
