@@ -190,7 +190,11 @@ sams-cgv/
 │   │   ├── cell_clean.py      # M6
 │   │   ├── ink_mask.py        # M6
 │   │   └── presence.py        # M7
-│   ├── recognise/             # M8 (4 files)
+│   ├── recognise/
+│   │   ├── preprocess_sig.py  # M8
+│   │   ├── features.py        # M8
+│   │   ├── matcher.py         # M8
+│   │   └── report.py          # M8
 │   └── viz/
 │       ├── progress.py        # M1
 │       ├── charts.py          # M9
@@ -200,9 +204,19 @@ sams-cgv/
 │   ├── make_fixtures.py       # M1
 │   ├── make_m1_figures.py     # M1 — the three figures in §13
 │   ├── seed_db.py             # M7
+│   ├── eval_recognition.py    # M8 — the genuine vs impostor experiment
 │   ├── run_all_sheets.py      # M9
 │   └── make_report_assets.py  # M9
 ├── tests/
+│   ├── test_pipeline.py       # M1
+│   ├── test_geometry.py       # M2
+│   ├── test_enhance.py        # M3
+│   ├── test_binarize.py       # M4
+│   ├── test_table.py          # M5
+│   ├── test_ink.py            # M6
+│   ├── test_decision.py  test_db.py       # M7
+│   ├── test_recognition.py    # M8
+│   └── test_charts.py  test_e2e.py        # M9
 ├── data/
 │   ├── sheets/  info.xml  fixtures/  ground_truth.csv  attendance.db
 ├── outputs/
