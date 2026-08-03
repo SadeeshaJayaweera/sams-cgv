@@ -789,6 +789,202 @@ CLAHE_CLIP, CLAHE_GRID = 2.0, (8, 8)
 
 ---
 
+## 9.4 M4 — Binarisation & Morphology
+
+**Branch** `feat/m4-binarize` · **Owns** `src/preprocess/binarize.py`, `tests/test_binarize.py`
+**Reads** `ctx["grey"]` · **Writes** `ctx["binary"]` · **Blocks** M5, and later helps M8
+
+**Ink = 255 (white), paper = 0 (black). This never changes.** `THRESH_BINARY_INV` gives it to you. Everyone downstream assumes it, and getting the polarity backwards silently breaks M5, M6 and M7 at once.
+
+### What T0 measured that changes your job
+
+- Your real customer is **M5's line detection**, not the human eye. The printed table lines are thin — closing that repairs a broken pen stroke can also weld a signature to the border line, and M6 then measures a signature that is 40% table. Tune with M5 watching.
+- Two cells on `05.07.2019` and `21.06.2019` contain **faint marks that are not signatures**. Do not tune your threshold until they disappear — losing them makes M7's job look easy and the accuracy numbers dishonest. Keep them, and let M7's rule reject them.
+
+### Contract
+
+```python
+class BinarizeStage(Stage):
+    name = "binarize"
+    def run(self, ctx: dict) -> dict: ...
+
+def threshold_global(grey, value: int = 127) -> np.ndarray: ...
+def threshold_otsu(grey) -> tuple[np.ndarray, int]:
+    """Binary image AND the chosen threshold. Search written by hand — see T2."""
+def threshold_adaptive(grey, method="gaussian", block=35, c=10) -> np.ndarray: ...
+def threshold_sauvola(grey, window=25) -> np.ndarray: ...
+def morph_clean(binary, open_k=2, close_k=3) -> np.ndarray: ...
+def skeletonize_ink(binary) -> np.ndarray: ...
+def clean_signature_crop(mask) -> np.ndarray:
+    """Small-crop variant for M8. Agree what they need before writing it."""
+```
+
+`src/config.py` under `# --- M4 binarisation ---`:
+
+```python
+BINARIZE_METHOD = "adaptive"      # global | otsu | adaptive | sauvola
+ADAPTIVE_BLOCK, ADAPTIVE_C = 35, 10
+SAUVOLA_WINDOW = 25
+MORPH_OPEN_K, MORPH_CLOSE_K = 2, 3
+```
+
+### Tasks
+
+**T1 — Global baseline, kept as a failure exhibit.** One fixed value cannot suit a photo with a shadowed corner. Keep the failure image, it is a good figure.
+- `feat(preprocess): add global fixed threshold baseline`
+
+**T2 — Otsu, written by hand.** Do not stop at `cv2.THRESH_OTSU`. Implement it: 256-bin normalised histogram; for each candidate `t` compute class weights `w0, w1` and means `m0, m1`; maximise between-class variance `w0 * w1 * (m0 - m1)²`. Then check your value matches OpenCV within ±1 — that check is both a strong test and a strong report point.
+- `feat(preprocess): implement otsu threshold search with numpy`
+- `feat(preprocess): return chosen threshold value alongside binary image`
+- `test(preprocess): verify custom otsu matches opencv within one level`
+
+**T3 — Adaptive.** Mean and Gaussian. Normally the winner on phone photos. Sweep `block` and `c`, record the best pair. Force odd block sizes or raise a clear `ValueError`.
+- `feat(preprocess): add adaptive mean and gaussian thresholding`
+- `fix(preprocess): force odd block size and validate parameters`
+- `docs(preprocess): record adaptive block and c sweep results`
+
+**T4 — Sauvola.** `skimage.filters.threshold_sauvola`, built for documents. Compare against adaptive.
+- `feat(preprocess): add sauvola local thresholding for documents`
+
+**T5 — Compare properly (this earns marks).** Per method, per sheet: ink pixel percentage (a few percent, not 40), connected component count, **whether M5's table lines survive**, runtime.
+- `feat(preprocess): add binarisation comparison harness with metrics`
+- `docs(preprocess): record method comparison across all five sheets`
+
+**T6 — Morphology.** Opening kills specks, closing repairs broken strokes. Try `MORPH_ELLIPSE` and `MORPH_RECT`.
+- `feat(preprocess): add morphological opening to remove speckle noise`
+- `feat(preprocess): add closing to repair broken pen strokes`
+- `fix(preprocess): reduce closing kernel to stop strokes merging with table lines`
+
+**T7 — Skeletonisation.** `skimage.morphology.skeletonize`. M6 needs `stroke_length` and M8 needs it too.
+- `feat(preprocess): add skeletonisation for one pixel wide strokes`
+
+**T8 — Wrap as a Stage.** Method from `config.py`, `figures()` returns raw and cleaned.
+- `feat(preprocess): wrap thresholding chain in BinarizeStage class`
+
+**T9 — Help M8.** `clean_signature_crop(mask)` tuned for small crops, not whole sheets. Ask M8 what they need first.
+- `feat(preprocess): add signature crop cleaning helper for recognition`
+
+**Verify:** `set(np.unique(ctx["binary"])) <= {0, 255}`, ink is white, and M5 confirms the table lines are unbroken.
+
+**Figures:** `m4_threshold_comparison.png`, `m4_otsu_histogram.png` (**your best figure — the between-class variance curve with the chosen threshold marked**), `m4_global_failure.png`, `m4_morphology.png`, `m4_metrics.png`
+
+---
+
+## 9.5 M5 — Table Detection
+
+**Branch** `feat/m5-table` · **Owns** `src/table/line_detect.py`, `src/table/grid_builder.py`, `src/table/cell_extract.py`, `tests/test_table.py`
+**Reads** `ctx["binary"]`, `ctx["warped"]` · **Writes** `ctx["grid"]`, `ctx["cells"]` · **Blocks** M6, and so M7, M8, M9
+
+The hardest single module. Get a rough `list[Cell]` into M6's hands early — rough and early beats perfect and late.
+
+### What T0 measured that changes your job — read this twice
+
+**Your brief document is wrong on all four of these. This file wins.**
+
+1. **There are 5 columns, not 4.** `No | Student No | Title | Student Name | Signature`. So `EXPECTED_COLS = 5` and the signature is column **4**. Always use `config.SIGNATURE_COL`, never a literal.
+2. **There are two tables on the page.** A one-row lecture header table (`Date | time | Lecture's Name | Signatue`) sits directly above the student table, and **it also has a signature in its last column — the lecturer's.** If you pick the wrong table, or merge the two, the lecturer's signature is reported as a student's and the whole system is wrong in a way that still looks plausible. Select the **lower** block of horizontal lines, the one with 7 lines bounding 6 data rows plus a header. Log which one you took.
+3. **6 data rows on every sheet, one header row.** `Grid.header_rows = 1`, `row = 0` is student 1. Row count is a hard check: if you do not get 6, warn loudly (§10) rather than silently returning 5.
+4. **Signatures cross cell borders.** On `31.05.2019` and `05.07.2019` a signature runs well into the row below. Crop with a small vertical pad rather than a hard cut, and see §14 decision 1 — you and M6 agree the rule together.
+
+### Contract
+
+```python
+# src/table/line_detect.py
+def detect_horizontal_lines(binary, min_len_ratio: float = 0.5) -> list[int]: ...
+def detect_vertical_lines(binary, min_len_ratio: float = 0.5) -> list[int]: ...
+def line_mask(binary, orientation: str) -> np.ndarray: ...
+
+# src/table/grid_builder.py
+@dataclass
+class Grid:
+    xs: list[int]              # vertical line positions, left to right
+    ys: list[int]              # horizontal line positions, top to bottom
+    header_rows: int = 1
+    @property
+    def n_rows(self) -> int: ...
+    @property
+    def n_cols(self) -> int: ...
+    def cell_bbox(self, row: int, col: int) -> tuple[int, int, int, int]: ...
+    def cells(self, col: int | None = None) -> list[Cell]: ...
+
+def build_grid(xs: list[int], ys: list[int]) -> Grid: ...
+def select_student_table(row_bands: list[list[int]]) -> list[int]:
+    """Given the horizontal line groups on the page, return the ones
+    belonging to the student table. The lecture header table is discarded."""
+
+# src/table/cell_extract.py
+class TableStage(Stage):
+    name = "table"
+    def run(self, ctx: dict) -> dict: ...
+
+def crop_cell(warped, bbox, inset: int = 4, pad_y: int = 0) -> np.ndarray:
+    """Inset excludes the border; pad_y keeps an overflowing signature."""
+```
+
+`ctx["cells"]` is the signature column only, `.image` cropped from **`warped` in colour** — never the binary image, M6 needs the pen colour — with `.row` set and no gaps.
+
+`src/config.py` under `# --- M5 table detection ---`:
+
+```python
+H_KERNEL_RATIO = 0.30
+V_KERNEL_RATIO = 0.30
+LINE_MERGE_TOL = 8
+MIN_ROW_HEIGHT = 18
+MIN_COL_WIDTH = 25
+CELL_INSET = 4
+CELL_PAD_Y = 6            # keeps signatures that overflow the row
+EXPECTED_COLS = 5         # No, Student No, Title, Student Name, Signature
+EXPECTED_DATA_ROWS = 6
+```
+
+### Tasks
+
+**T1 — Line masks by morphology.** Horizontal: erode then dilate with a `(width * H_KERNEL_RATIO, 1)` kernel; vertical with `(1, height * V_KERNEL_RATIO)`. Far more reliable than Hough on printed tables — do this first.
+- `feat(table): extract horizontal line mask with wide morphology kernel`
+- `feat(table): extract vertical line mask with tall morphology kernel`
+- `feat(table): combine masks to visualise the detected table skeleton`
+
+**T2 — Positions from projection profiles.** Sum the mask along an axis, find peaks, merge peaks closer than `LINE_MERGE_TOL`.
+- `feat(table): convert line masks to positions using projection profiles`
+- `feat(table): merge nearby peaks into single line positions`
+
+**T3 — Pick the student table.** Group the horizontal lines into bands separated by large gaps. The lecture header table is a short band of 2–3 lines near the top; the student table is the tall band of 7. Take the student table, log the choice, and keep both drawn in a figure so the report can show the trap.
+- `feat(table): group horizontal lines into table bands`
+- `feat(table): select the student table and discard the lecture header table`
+- `fix(table): warn when the expected two table bands are not found`
+
+**T4 — Hough as cross-check.** `HoughLinesP`, keep lines within ±5° of axis-aligned. Compare with T2. A cross-check and a figure — not the primary method.
+- `feat(table): add hough line detection as cross check`
+- `docs(table): compare morphology and hough line positions`
+
+**T5 — Grid repair.** Real photos lose lines. Find the median row spacing, insert a line where a gap is close to a multiple of it, drop lines below `MIN_ROW_HEIGHT` / `MIN_COL_WIDTH`, and warn loudly when the column count is not `EXPECTED_COLS` or the data row count is not `EXPECTED_DATA_ROWS`.
+- `feat(table): estimate median row spacing`
+- `feat(table): insert missing horizontal lines from regular spacing`
+- `fix(table): drop duplicate lines below minimum spacing`
+- `feat(table): warn when detected row or column count is unexpected`
+
+**T6 — Header handling.** Set `Grid.header_rows = 1` so data row 0 is the first student.
+- `feat(table): detect and skip the header row`
+
+**T7 — Cell cropping.** `CELL_INSET` to keep the border out, `CELL_PAD_Y` to keep an overflowing signature in. Build `Cell` objects for `config.SIGNATURE_COL` from the **warped colour image**.
+- `feat(table): crop cells with inset to exclude table borders`
+- `feat(table): pad cell crops vertically for overflowing signatures`
+- `feat(table): build Cell objects for the signature column`
+- `fix(table): crop from warped colour image so pen colour is preserved`
+
+**T8 — Wrap as a Stage.** `figures()` returns the line masks and a grid overlay on the warped sheet.
+- `feat(table): wrap grid detection in TableStage class`
+
+**T9 — All five sheets.** Record detected rows and columns per sheet against the true 6 and 5. Tune ratios in `config.py` only.
+- `fix(table): tune kernel ratios for sheets with faint printed lines`
+- `docs(table): record per sheet row and column detection accuracy`
+
+**Verify:** on all five sheets, `len(ctx["cells"]) == 6` and every crop shown in `m5_cells_numbered.png` is a signature box and not a name.
+
+**Figures:** `m5_line_masks.png`, `m5_projection_profiles.png`, `m5_grid_overlay.png`, `m5_cells_numbered.png`, `m5_grid_repair.png`, `m5_two_tables.png` (**the header table and the student table distinguished — this is the figure that shows you understood the page**), `m5_hough_vs_morphology.png`
+
+---
+
 ## 10. Error handling rules
 
 - User mistakes (missing file, bad index, empty database) → friendly one-line message, `sys.exit(2)`, **no traceback**.
