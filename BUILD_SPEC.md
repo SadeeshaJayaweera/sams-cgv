@@ -1,22 +1,38 @@
 # BUILD_SPEC.md — SAMS (Student Attendance Management System)
 
-**Repository root file. This is the single source of truth for Claude Code.**
+**Repository root file. This is the single source of truth for the whole group.**
 Owner of this file: **M1 (Lead / Integration)**. Nobody else edits it — they raise a change request.
 
 Module: CS402.3 Computer Graphics and Visualization, NSBM Green University
 Coursework weight: 20% — Prototype 60%, Report 25%, Individual contribution 15%
-Group size: 9 (brief asks for 10; pending confirmation with the module leader)
+Group: 9 members, M1 to M9, one module each
+
+| | Member | Module | Owns |
+|---|---|---|---|
+| M1 | T.R.D.T. Dulshan | Lead / Integration & Progress Viewer | skeleton, contracts, pipeline, 3 CLIs, step viewer |
+| M2 | | Acquisition & Geometry | load the photo, flatten it |
+| M3 | | Greyscale & Enhancement | shadow removal, denoise, contrast |
+| M4 | | Binarisation & Morphology | ink 255 / paper 0, clean it |
+| M5 | | Table Detection | find the lines, cut out the cells |
+| M6 | | Ink Segmentation | multi-colour pen ink masks and features |
+| M7 | | Decision & Database | present or absent, info.xml, SQLite |
+| M8 | | Signature Recognition | `investigate.py`, the bonus-mark module |
+| M9 | | Visualisation & QA | `infovis.py` charts, end-to-end testing |
+
+Fill in the names before submission — the front page of the report needs them.
 
 ---
 
-## 0. How an agent must use this file
+## 0. How to use this file
 
-1. Read this whole file before writing code.
-2. Only implement tasks under **§9 M1 task list**. Every other module belongs to another person.
-3. For modules M1 does not own, create **stubs only** (see §8). Never write a real implementation for someone else's file.
-4. Work task by task, in order. Commit after each task with the exact message given.
-5. After each task, run the verification command listed for it. Do not move on if it fails.
-6. If reality contradicts this spec (for example the real `info.xml` has different tags), **update this file first**, commit that change, then write the code.
+1. Read **§0 to §8** in full before writing any code. Those sections are shared by everyone and are not negotiable.
+2. Find your own module in **§9**. Implement **only** that. Every other module belongs to another person — if you need something changed there, message them, do not edit their file.
+3. Work task by task, in order. Commit after each task with the exact message given (§12).
+4. After each task, run the verification listed for it. Do not move on if it fails.
+5. If reality contradicts this spec, **tell M1**. M1 updates this file, commits that change, and only then does anyone write code against it. §4 is the record of every time that has already happened.
+6. Until your module lands, a placeholder in `src/stubs.py` stands in for it, so `sams.py` runs end to end for everyone from day one (§8). When you merge, M1 deletes your stub and wires you into `STAGES`.
+
+**Your brief document is not this file.** Each member was given an `M<N>_*.md` brief. Those were written before anyone had looked at the real sheets, and several of their assumptions are wrong — the sheet has 5 columns and not 4, indices are 8 digits and not 3, there are two tables on the page. **Where your brief and this file disagree, this file wins.** §4 lists every correction, and §9 repeats the ones that affect each module.
 
 ---
 
@@ -430,7 +446,23 @@ Rules for stubs:
 
 ---
 
-## 9. M1 task list
+## 9. Task lists
+
+One subsection per member. Work through your own in order — implement, verify, commit — and ignore the rest except to know what arrives from the person before you.
+
+Every module, without exception:
+
+- Subclasses `Stage` for its pipeline step (§6.2) and honours the context keys in §6.3.
+- Puts its tunable numbers in its own block in `src/config.py` and hard-codes nothing.
+- Writes its tests in `tests/test_<area>.py` (§11) and its figures to `outputs/figures/m<N>_*.png` at 150 dpi minimum.
+- Drafts `docs/contrib_m<N>.md` as it goes, not the night before.
+- Reaches 15+ commits on branch `feat/m<N>-<area>` (§12).
+
+---
+
+## 9.1 M1 — Lead / Integration & Progress Viewer
+
+**Branch** `feat/m1-core` · **Owns** `sams.py`, `infovis.py`, `investigate.py`, `src/config.py`, `src/models.py`, `src/pipeline.py`, `src/cli.py`, `src/stubs.py`, `src/utils/*`, `src/viz/progress.py`, `tools/inspect_inputs.py`, `tools/make_fixtures.py`, `tools/make_m1_figures.py`, `tests/test_pipeline.py`
 
 Work in this order. Each task: implement → verify → commit.
 
@@ -650,11 +682,43 @@ Fill `README.md`: what it is, install, the three commands, folder map, known lim
 
 ---
 
-## 14. Open questions
+## 14. Integration order and hand-offs
 
-1. Group size is 9, brief asks for 10 — confirm with Dr. Ranaweera. **Open.**
-2. ~~Real `info.xml` tag structure~~ — **resolved in T0.** The file was never supplied. It is reconstructed as `nsbm/students/batches/batch/student` with `index`, `title`, `name`. If the real file later appears, re-run T0 and update §4 rather than patching the parser.
-3. ~~Whether sheet row order matches XML student order~~ — **resolved in T0.** They match, because the XML was transcribed from the sheets in row order. Positional mapping is therefore safe for the prototype; M7 should still warn when the row count and the student count disagree (§10).
-4. ~~Whether any sheet is greyscale~~ — **resolved in T0.** All five are 3 channel colour with real colour content. M6 keeps saturation as the primary path.
-5. **New, open:** the two sheets where a signature spills into the neighbouring row (§4 deviation 6) may need M5 to pad cells vertically and M6 to attribute a stroke to the row that holds most of it. M5 and M6 to agree an approach.
-6. **New, open:** `ab` written in a signature cell (§4 deviation 7) is ink that means absent. Decide with M7 whether the decision stage handles it by stroke shape or whether it is documented as a known limitation.
+Who unblocks whom. Nobody waits for a module that is not directly above them — stubs and fixtures cover the gap (§8).
+
+```
+M1 skeleton + contracts + fixtures     ← everybody waits on this, and only this
+   │
+   ├── M2 geometry → M3 enhance → M4 binarise → M5 table → M6 ink → M7 decision
+   │                                                                    │
+   │                                                          ┌─────────┴─────────┐
+   │                                                          ▼                   ▼
+   └── M7 database schema + seed_db.py ──────────────────▶ M9 charts        M8 recognition
+```
+
+| Hand-off | From | To | What has to be true |
+|---|---|---|---|
+| skeleton, `Stage`, `models`, `config` | M1 | everyone | on `main` before anyone starts |
+| `data/fixtures/*.png` | M1 | M3–M8 | crude but type-correct, so nobody idles |
+| `ctx["warped"]` | M2 | M3, M5 | flat, tightly cropped, both tables visible |
+| `ctx["grey"]` | M3 | M4 | evenly lit; settings agreed jointly with M4 |
+| `ctx["binary"]` | M4 | M5 | ink 255, table lines intact after morphology |
+| `ctx["cells"]` | M5 | M6 | signature column only, **colour** crops, `.row` set, no gaps |
+| `ctx["ink"]` | M6 | M7 | one `InkResult` per cell, same order; key names agreed with M7 first |
+| `outputs/cells/<date>/<index>.png` | M6 | M8 | crop and `_mask` saved per present student |
+| database schema + `tools/seed_db.py` | M7 | M8, M9 | **pushed first, before M7's own decision logic** |
+| `ctx["records"]` | M7 | M1 | drives the summary table |
+| `charts.show_student` / `show_all` | M9 | M1 | §6.5 signatures exactly |
+| `matcher.investigate` | M8 | M1 | §6.5 signature exactly |
+
+**Integration is M1's job, one module at a time.** As each lands: delete its stub from `src/stubs.py`, swap the line in `STAGES`, run `sams.py` on all five sheets, commit `refactor(pipeline): replace <stage> stub with real implementation`. Never swap two at once — when it breaks you will not know which one did it.
+
+### The three decisions the group has to make together
+
+Each has an owner and a deadline of *before that module is merged*.
+
+1. **Overflowing signatures — M5 and M6 agree the approach.** §4 deviation 6. A signature that spills into the row below belongs to the row it *starts* in. Proposal: M5 crops with a small vertical pad, M6 attributes each connected component to the row holding most of its pixels. Whoever writes it first tells the other.
+2. **Ink that is not a signature — M6 and M7 agree the split.** §4 deviation 7. `ab` and a stray tick are both ink and both mean absent. M6 supplies the features that separate them (`stroke_length`, `filled_ratio`, `aspect`, `components`); M7 owns the rule that uses them. If it cannot be made reliable across 30 cells, it is written up as a measured limitation with the exact failing cells named — that earns marks. Guessing does not.
+3. **The confidence band — M7 with M1.** `config.UNCERTAIN_BELOW` decides what the summary calls uncertain. M7 sets it from the threshold sweep, not by feel.
+
+---
