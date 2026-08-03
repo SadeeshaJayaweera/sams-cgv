@@ -985,6 +985,251 @@ EXPECTED_DATA_ROWS = 6
 
 ---
 
+## 9.6 M6 — Ink Segmentation
+
+**Branch** `feat/m6-ink` · **Owns** `src/detect/cell_clean.py`, `src/detect/ink_mask.py`, `tests/test_ink.py`
+**Reads** `ctx["cells"]` · **Writes** `ctx["ink"]` · **Blocks** M7, and supplies M8's crops
+
+The brief says students sign **using different colour pens**. Handling that is your headline contribution.
+
+### What T0 measured that changes your job
+
+- The five sheets are signed in **blue ballpoint almost throughout**, with **one red mark** on `05.07.2019`. So your multi-colour machinery is right, but you cannot prove it on this data alone — **make synthetic green and black test cells** and prove it there, then say plainly in the report that the sample happened to be mostly blue. A measured limitation beats an unproven claim.
+- **Two cells contain ink that is not a signature**: the lecturer's handwritten `ab` on `21.06.2019`, and a small stray red tick on `05.07.2019`. Both mean *absent*. **Your job is not to decide that** — it is to supply features sharp enough that M7 can. `stroke_length`, `filled_ratio`, `aspect` and `components` are what separate a signature from a two-letter word or a 3 mm tick. See §14 decision 2.
+- **Signatures overflow their cells.** A stroke starting in row 3 can end in row 4. Attribute a connected component to the row holding most of its pixels, and agree the rule with M5 (§14 decision 1).
+- **Crop filenames: use the student index, not the row number.** Your brief says `row_<n>.png`. It must be `outputs/cells/<sheet_date>/<index>.png` and `<index>_mask.png`, because that is what §5.4 defines, what `investigate.py` globs to count samples, and what M8 looks up. The `Cell` does not know its index — M7 attaches it — so either write the crops in `DecisionStage` after mapping, or have M5 pass the row and M7 rename. **Agree this with M7 before you write it.**
+
+### Contract
+
+```python
+# src/detect/cell_clean.py
+def remove_table_lines(cell_bgr) -> np.ndarray: ...
+def trim_to_content(mask, pad: int = 4) -> tuple[np.ndarray, tuple]: ...
+
+# src/detect/ink_mask.py
+class InkStage(Stage):
+    name = "ink"
+    def run(self, ctx: dict) -> dict: ...
+
+def ink_mask(cell_bgr, method: str = "combined") -> np.ndarray:
+    """'hsv' | 'lab' | 'saturation' | 'darkness' | 'combined'. ink = 255."""
+
+def dominant_pen_colour(cell_bgr, mask) -> str:
+    """'blue' | 'black' | 'red' | 'green' | 'other'."""
+
+def ink_features(mask) -> dict:
+    """ink_ratio, components, stroke_bbox, aspect, stroke_length,
+    filled_ratio, centroid_offset. Key names agreed with M7 first."""
+```
+
+`src/config.py` under `# --- M6 ink segmentation ---`:
+
+```python
+INK_METHOD = "combined"
+SAT_MIN = 60
+VAL_MAX = 200
+DARK_MAX = 160
+MIN_BLOB_AREA = 12
+CELL_PAD = 4
+PEN_HUE_RANGES = {
+    "blue":  [(90, 130)],
+    "green": [(40, 85)],
+    "red":   [(0, 10), (170, 180)],
+}
+```
+
+### Tasks
+
+**T1 — Clean the crop.** Remove long straight runs touching the crop edge, drop blobs touching the outer 2-pixel frame. M5's inset helps but does not finish the job.
+- `feat(detect): remove leftover table border lines inside cell crops`
+- `fix(detect): drop blobs touching the crop edge`
+
+**T2 — Colour ink mask (headline work).** HSV. Coloured pens: `saturation >= SAT_MIN` — white paper has almost none. Black pen has no saturation either, so add `value <= VAL_MAX`. Combine with OR. Also try LAB's `a`/`b` channels and report which won.
+- `feat(detect): add hsv saturation mask for coloured pen ink`
+- `feat(detect): add value threshold branch to catch black pen`
+- `feat(detect): add lab colour space ink mask variant`
+- `feat(detect): combine colour and darkness masks into one ink mask`
+- `docs(detect): compare hsv and lab masking results`
+
+**T3 — Clean the mask.** Drop components under `MIN_BLOB_AREA`, small close to join broken strokes. **Never dilate heavily** — it inflates `ink_ratio` and makes empty cells look signed.
+- `feat(detect): drop connected components below minimum area`
+- `feat(detect): close small gaps within pen strokes`
+
+**T4 — Pen colour.** Mean hue of ink pixels through `PEN_HUE_RANGES`; low saturation means black. Handle red's wrap-around at 0/180.
+- `feat(detect): identify dominant pen colour from ink hue`
+- `feat(detect): count pen colour usage per sheet`
+
+**T5 — Features for M7.** Full `InkResult`. `stroke_length` comes from M4's `skeletonize_ink` — ask, do not rewrite it. Agree every key name with M7 **before** writing.
+- `feat(detect): compute ink ratio and connected component count`
+- `feat(detect): add stroke bounding box and aspect ratio features`
+- `feat(detect): add skeleton length and fill ratio features`
+
+**T6 — Save crops for M8.** Colour crop and mask to `outputs/cells/<sheet_date>/<index>.png` and `<index>_mask.png`, paths into `InkResult.crop_path` / `.mask_path`. Without these there is no `investigate.py`.
+- `feat(detect): save cell crops and masks for signature recognition`
+
+**T7 — Wrap as a Stage.** `figures()` returns a montage of the cells and their masks.
+- `feat(detect): wrap ink segmentation in InkStage class`
+
+**T8 — Tune on all five sheets.** Look at failures with your own eyes: faint ink, a signature crossing rows, a printed dot read as ink.
+- `fix(detect): lower saturation threshold for faded ink`
+- `docs(detect): record ink segmentation failure cases`
+
+**Verify:** the four genuinely empty cells (`28.06.2019` rows 2 and 3, `05.07.2019` row 2, and any blank you find) give near-zero `ink_ratio`; every real signature gives a clearly higher one.
+
+**Figures:** `m6_colour_spaces.png`, `m6_hue_scatter.png`, `m6_mask_panels.png`, `m6_border_removal.png`, `m6_pen_colour_counts.png`, `m6_empty_vs_signed.png`, `m6_ink_that_is_not_a_signature.png` (**the `ab` cell and the red tick beside a real signature, with all their features printed — this is the figure the discussion section needs**)
+
+---
+
+## 9.7 M7 — Decision & Database
+
+**Branch** `feat/m7-decision-db` · **Owns** `src/io/xml_parser.py`, `src/io/db.py`, `src/detect/presence.py`, `tools/seed_db.py`, `tests/test_decision.py`, `tests/test_db.py`
+**Reads** `ctx["ink"]`, `ctx["students"]` · **Writes** `ctx["records"]`, the database · **Blocks** M8 and M9
+
+Last stage of the pipeline and the only source of data for M8 and M9. **Push the database schema and `tools/seed_db.py` before you write a line of decision logic** — two people are idle until you do.
+
+### What T0 measured that changes your job
+
+1. **`info.xml` is not the shape your brief guesses.** It is not `<info><students><student>`. The real file, reconstructed and committed, is:
+   `nsbm/students/batches/batch/student` with `index`, `title`, `name`, plus a sibling `nsbm/subject` holding `code`, `name`, `degree`, `lecturer`.
+   **Find students with `.//student`** and read the subject with `.//subject`. That survives the batch element changing shape, which matters because the brief's own Figure 1 shows `<15>` — a tag that starts with a digit and therefore parses in nothing. See §4 deviation 4.
+2. **Indices are 8 digits**, e.g. `10000409`. Still strings. `int()` anywhere near an index is a bug.
+3. **Positional mapping is safe here.** The XML was transcribed from the sheets in row order, so sheet row *n* is XML student *n*. Still warn when the counts disagree (§10). OCR verification of the printed index column stays optional.
+4. **`data/ground_truth.csv` already exists** — 30 rows, hand-transcribed by M1 in T0, with a `note` column naming the two awkward cells. Your T5 is to *verify and use* it, not create it. Check a sample against the images yourself before you trust it.
+5. **The interesting accuracy cases are known in advance.** `21.06.2019 / 10009306` holds `ab`; `05.07.2019 / 10009303` holds a stray red tick. Both are ink and both are absent. Report your accuracy with and without them, and say which way you leaned on false-positive against false-negative.
+6. **`src/io/db.py` must expose `known_indices()` and `is_empty()`** as module-level functions — §6.5. `infovis.py` and `investigate.py` call them to give helpful errors. Wrap the `Database` class; do not make the CLIs construct one.
+
+### Contract
+
+```python
+# src/io/xml_parser.py
+def parse_info(path) -> tuple[list[Student], dict]:
+    """Students in sheet order, plus meta: subject_code, subject_name, lecturer."""
+
+def parse_students(path) -> list[Student]:
+    """Thin wrapper — this is what sams.py imports (§6.5)."""
+
+# src/detect/presence.py
+class DecisionStage(Stage):
+    name = "decision"
+    def run(self, ctx: dict) -> dict: ...
+
+def decide(result: InkResult) -> tuple[bool, float]: ...
+def map_rows_to_students(cells, students) -> dict[int, str]: ...
+
+# src/io/db.py
+class Database:
+    def __init__(self, path: Path = config.DB_PATH): ...
+    def init_schema(self) -> None: ...
+    def upsert_students(self, students) -> None: ...
+    def upsert_sheet(self, meta, subject_code) -> int: ...
+    def save_attendance(self, records, sheet_id) -> None: ...
+    def save_signature(self, student_index, sheet_id, **fields) -> None: ...
+    def get_attendance(self, student_index) -> list[dict]: ...
+    def get_signatures(self, student_index) -> list[dict]: ...
+    def get_all_attendance(self) -> list[dict]: ...
+    def get_student(self, student_index) -> dict | None: ...
+
+def known_indices() -> list[str]: ...     # §6.5, called by the CLIs
+def is_empty() -> bool: ...               # §6.5, called by the CLIs
+```
+
+Schema — four tables in `data/attendance.db`:
+
+```sql
+CREATE TABLE IF NOT EXISTS students (
+    student_index TEXT PRIMARY KEY,
+    name          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sheets (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet_date    TEXT UNIQUE NOT NULL,
+    image_path    TEXT,
+    subject_code  TEXT,
+    processed_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS attendance (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_index TEXT NOT NULL,
+    sheet_id      INTEGER NOT NULL,
+    present       INTEGER NOT NULL,
+    confidence    REAL,
+    ink_ratio     REAL,
+    UNIQUE(student_index, sheet_id),
+    FOREIGN KEY (student_index) REFERENCES students(student_index),
+    FOREIGN KEY (sheet_id)      REFERENCES sheets(id)
+);
+CREATE TABLE IF NOT EXISTS signatures (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_index TEXT NOT NULL,
+    sheet_id      INTEGER NOT NULL,
+    crop_path     TEXT,
+    mask_path     TEXT,
+    ink_ratio     REAL,
+    components    INTEGER,
+    aspect        REAL,
+    stroke_length INTEGER,
+    UNIQUE(student_index, sheet_id)
+);
+```
+
+Parameterised queries everywhere (`?`), context-managed connections, `INSERT OR REPLACE` so re-running a sheet updates instead of duplicating.
+
+`src/config.py` under `# --- M7 decision ---`:
+
+```python
+INK_RATIO_THRESHOLD = 0.012      # set from the sweep in T5, not by feel
+MIN_COMPONENTS = 1
+MIN_STROKE_LENGTH = 25
+CONF_LOW, CONF_HIGH = 0.008, 0.030
+```
+
+### Tasks
+
+**T1 — Database first.** Schema, `Database`, `init_schema`, the two module-level helpers, and `tools/seed_db.py` with fake data. Push and tell M8 and M9 the same hour.
+- `feat(db): add sqlite schema for students, sheets and attendance`
+- `feat(db): add Database class with context managed connections`
+- `feat(db): add signatures table for recognition module`
+- `feat(db): expose known_indices and is_empty for the cli helpers`
+- `chore(tools): add db seeder with fake data for downstream development`
+
+**T2 — XML parser.** `xml.etree.ElementTree`, `.//student`. Indices stay strings. Clear errors for malformed or missing tags.
+- `feat(io): parse info.xml into student and subject records`
+- `fix(io): keep student indices as strings to preserve leading zeros`
+- `fix(io): give clear errors for malformed or missing xml tags`
+
+**T3 — Row to student mapping.** Positional first. OCR verification of the printed index column (`pytesseract`, digits only) only if time allows; on disagreement, warn and trust the XML.
+- `feat(detect): map sheet rows to students by position`
+- `feat(detect): warn when row count and xml student count differ`
+- `feat(detect): optional ocr verification of printed index column`
+
+**T4 — The decision rule.** Never one number alone:
+```
+present = ink_ratio >= INK_RATIO_THRESHOLD
+          and components >= MIN_COMPONENTS
+          and stroke_length >= MIN_STROKE_LENGTH
+```
+Confidence scales `ink_ratio` between `CONF_LOW` and `CONF_HIGH`, reduced near the threshold. Borderline cells are flagged uncertain — being willing to say so is a strength.
+- `feat(detect): add ink ratio threshold decision`
+- `feat(detect): require minimum components and stroke length`
+- `feat(detect): compute confidence score from ink ratio`
+- `feat(detect): flag borderline cells as uncertain`
+
+**T5 — Tune against ground truth.** Verify `data/ground_truth.csv` against the images, then sweep `INK_RATIO_THRESHOLD` and pick the best accuracy. **Show the sweep curve.** Report accuracy including and excluding the two ink-but-absent cells.
+- `chore(data): verify hand labelled ground truth against the sheets`
+- `feat(detect): add threshold sweep tool over ground truth`
+- `fix(detect): set ink ratio threshold from sweep results`
+
+**T6 — Wrap as a Stage and persist.** Decide → build records → upsert students, sheet, attendance and signatures in one transaction.
+- `feat(detect): wrap decision logic in DecisionStage class`
+- `feat(db): persist attendance and signature records per sheet`
+- `fix(db): make re-processing a sheet update instead of duplicating rows`
+
+**Verify:** all five sheets processed, 30 attendance rows and no duplicates on a second run; `sams.py` summary shows 6 students with the counts matching `ground_truth.csv`.
+
+**Figures:** `m7_threshold_sweep.png`, `m7_ink_ratio_distribution.png` (**overlapping present/absent histograms with the threshold line — your main figure**), `m7_confusion_matrix.png`, `m7_accuracy_per_sheet.png`, `m7_er_diagram.png`
+
+---
+
 ## 10. Error handling rules
 
 - User mistakes (missing file, bad index, empty database) → friendly one-line message, `sys.exit(2)`, **no traceback**.
