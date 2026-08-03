@@ -12,12 +12,15 @@ them, which is why it can serve all nine modules.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 from src import config
 from src.utils.logging import get_logger
@@ -194,3 +197,77 @@ class ProgressViewer:
                 interpolation=cv2.INTER_AREA,
             )
         return prepared
+
+    # -- montage -----------------------------------------------------------
+
+    @staticmethod
+    def _grid(count: int) -> tuple[int, int]:
+        """Rows and columns for ``count`` tiles.
+
+        The grid widens up to :data:`src.config.MONTAGE_MAX_COLS` and then
+        wraps, so four steps sit in one row and eight in two, rather than
+        eight unreadable slivers side by side.
+        """
+        columns = max(1, min(config.MONTAGE_MAX_COLS, count))
+        rows = math.ceil(count / columns)
+        return rows, columns
+
+    def build_montage(self) -> Figure:
+        """Lay every collected step out on one Matplotlib figure.
+
+        Returns:
+            The figure. The caller decides whether to show it, save it or both,
+            which is what lets one montage serve both the live window and
+            ``outputs/figures/m1_montage_<date>.png``.
+
+        Raises:
+            RuntimeError: If no steps were collected. A montage of nothing is a
+                bug in the pipeline, not a picture.
+        """
+        if not self._steps:
+            raise RuntimeError(
+                f"no steps collected for sheet {self.sheet_date}, nothing to show"
+            )
+
+        rows, columns = self._grid(len(self._steps))
+        tile_w, tile_h = config.MONTAGE_FIGSIZE_PER_TILE
+        figure, axes = plt.subplots(
+            rows,
+            columns,
+            figsize=(columns * tile_w, rows * tile_h),
+            dpi=config.FIGURE_DPI,
+        )
+        flat = np.atleast_1d(np.asarray(axes, dtype=object)).ravel()
+
+        for position, axis in enumerate(flat):
+            if position >= len(self._steps):
+                axis.axis("off")
+                continue
+            step = self._steps[position]
+            axis.imshow(step.image, cmap=step.cmap)
+            axis.set_title(f"{position + 1:02d}  {step.name}", fontsize=9)
+            axis.axis("off")
+
+        figure.suptitle(
+            f"SAMS processing steps — sheet {self.sheet_date}", fontsize=12
+        )
+        figure.tight_layout()
+        return figure
+
+    def show_montage(self) -> None:
+        """Open the montage window, unless ``show`` is off."""
+        if not self.show:
+            log.debug("display disabled, not showing the montage")
+            return
+        self.build_montage()
+        plt.show()
+
+    def save_montage(self, path: Path) -> Path:
+        """Write the montage to ``path`` for the report."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        figure = self.build_montage()
+        figure.savefig(path, dpi=config.FIGURE_DPI, bbox_inches="tight")
+        plt.close(figure)
+        log.info("montage saved to %s", path)
+        return path
