@@ -152,6 +152,7 @@ sams-cgv/
 │   ├── config.py              # M1 owns the file; each member adds a commented block
 │   ├── models.py              # M1
 │   ├── pipeline.py            # M1
+│   ├── cli.py                 # M1 — shared helpers for the three programs
 │   ├── stubs.py               # M1 — placeholder stages, deleted stage by stage
 │   ├── utils/
 │   │   ├── stage.py           # M1
@@ -325,6 +326,25 @@ def ensure_dirs() -> None:
 # --- M8 recognition ---
 # --- M9 visualisation ---
 ```
+
+### 6.5 Entry points the CLIs call
+
+The three programs are thin wrappers. They must not know how anything works, only what to call. These are the functions M1's CLIs import; until a module lands, `src/cli.py` catches the `ImportError` and prints *module not ready yet*.
+
+| Function | Owner | Returns |
+|---|---|---|
+| `src.io.xml_parser.parse_students(path: Path) -> list[Student]` | M7 | the roll, in sheet row order |
+| `src.io.db.known_indices() -> list[str]` | M7 | every student index the database has a record for |
+| `src.io.db.is_empty() -> bool` | M7 | `True` when no attendance has been stored yet |
+| `src.viz.charts.show_student(index: str, save_only: bool) -> None` | M9 | draws one student's attendance |
+| `src.viz.charts.show_all(save_only: bool) -> None` | M9 | draws the whole class |
+| `src.recognise.matcher.investigate(index: str, save_only: bool) -> None` | M8 | compares that student's signatures and reports mismatches |
+
+`save_only=True` means write to `outputs/` and open no window — needed so the whole prototype can be run over SSH or in a test.
+
+### 6.6 `src/cli.py`
+
+M1 owns a small shared helper module for the three programs: index validation, the *module not ready* message, and the friendly-error-then-`exit(2)` path. It exists so the same 20 lines are not written three times, and so all three commands fail in exactly the same way.
 
 ---
 
