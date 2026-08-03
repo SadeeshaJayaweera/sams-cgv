@@ -14,12 +14,48 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from src import config
+from src import config, stubs
+from src.models import SheetMeta, Student
+from src.pipeline import Pipeline
 from src.utils.logging import get_logger, set_debug
+from src.utils.stage import Stage
+from src.viz.progress import ProgressViewer
 
 log = get_logger("sams")
+
+STAGES: list[Callable[[], Stage]] = [
+    stubs.GeometryStub,   # M2 — src.preprocess.deskew
+    stubs.EnhanceStub,    # M3 — src.preprocess.enhance
+    stubs.BinarizeStub,   # M4 — src.preprocess.binarize
+    stubs.TableStub,      # M5 — src.table.cell_extract
+    stubs.InkStub,        # M6 — src.detect.ink_mask
+    stubs.DecisionStub,   # M7 — src.detect.presence
+]
+"""The pipeline, in the fixed order from BUILD_SPEC.md section 6.3.
+
+Swapping a stub for the real module is one line here and one deletion in
+``src/stubs.py``. Nothing else in the project changes, which is the whole point
+of every stage being a :class:`~src.utils.stage.Stage`.
+"""
+
+
+def load_students(xml_path: Path) -> list[Student]:
+    """Read the roll from ``info.xml``.
+
+    Prefers M7's real parser and falls back to the stub while it is unwritten,
+    so this file needs no edit on the day their module lands.
+    """
+    try:
+        from src.io.xml_parser import parse_students  # type: ignore[attr-defined]
+    except ImportError:
+        parse_students = stubs.parse_students
+
+    students = parse_students(xml_path)
+    log.info("%d students read from %s", len(students), xml_path.name)
+    return students
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,6 +103,20 @@ def main(argv: list[str] | None = None) -> int:
 
     sheet_date = args.image.stem
     log.info("sheet date %s from filename %s", sheet_date, args.image.name)
+
+    sheet = SheetMeta(path=args.image, date=sheet_date)
+    students = load_students(args.xml)
+
+    viewer = ProgressViewer(
+        sheet_date=sheet_date,
+        show=config.SHOW_PROGRESS and not args.no_show,
+        save=config.SAVE_STEPS and not args.no_save,
+    )
+    pipeline = Pipeline([make_stage() for make_stage in STAGES], viewer=viewer)
+    pipeline.run(sheet, students)
+
+    viewer.save_all()
+    viewer.show_montage()
     return 0
 
 
