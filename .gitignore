@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+outputs/
+data/attendance.db
+data/fixtures/
+.pytest_cache/
