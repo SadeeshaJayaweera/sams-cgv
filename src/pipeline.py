@@ -21,6 +21,26 @@ from src.viz.progress import ProgressViewer
 log = get_logger("pipeline")
 
 
+class PipelineError(RuntimeError):
+    """A stage failed.
+
+    The point of this class is the stage name. With nine people's code in one
+    line, ``ValueError: operands could not be broadcast`` is useless on its
+    own; ``stage 'table' failed: operands could not be broadcast`` says whose
+    module to open. The original exception is kept as ``__cause__`` so the full
+    traceback survives.
+
+    Args:
+        stage: :attr:`~src.utils.stage.Stage.name` of the stage that failed.
+        original: The exception it raised.
+    """
+
+    def __init__(self, stage: str, original: BaseException) -> None:
+        super().__init__(f"stage {stage!r} failed: {original}")
+        self.stage = stage
+        self.original = original
+
+
 class Pipeline:
     """Runs a list of stages over one signing sheet.
 
@@ -55,6 +75,11 @@ class Pipeline:
             The context dictionary, carrying every key the stages wrote. The
             keys are listed in BUILD_SPEC.md section 6.3.
 
+        Raises:
+            PipelineError: If any stage raises. The run stops there — a half
+                processed sheet must never reach the database looking like a
+                real answer.
+
         Timings for every stage are recorded in :mod:`src.utils.timing` and
         cleared first, so :func:`src.utils.timing.timings` describes this run
         and not the last one.
@@ -66,8 +91,12 @@ class Pipeline:
 
         for position, stage in enumerate(self.stages, start=1):
             log.info("[%d/%d] stage %r starting", position, len(self.stages), stage.name)
-            with timing.time_block(stage.name):
-                ctx = stage.run(ctx)
+            try:
+                with timing.time_block(stage.name):
+                    ctx = stage.run(ctx)
+            except Exception as error:
+                log.error("stage %r failed: %s", stage.name, error)
+                raise PipelineError(stage.name, error) from error
             self._collect_figures(stage)
             log.info("[%d/%d] stage %r done", position, len(self.stages), stage.name)
 
