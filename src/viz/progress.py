@@ -198,6 +198,50 @@ class ProgressViewer:
             )
         return prepared
 
+    # -- display -----------------------------------------------------------
+
+    def _for_display(self, step: Step) -> tuple[np.ndarray, str | None]:
+        """Prepare one step for Matplotlib.
+
+        OpenCV and Matplotlib disagree about channel order. OpenCV keeps
+        colour as blue, green, red; Matplotlib reads it as red, green, blue.
+        Handing a BGR array straight to ``imshow`` swaps the two ends of the
+        spectrum, so a blue pen renders orange and every step image in the
+        report is wrong in a way that looks deliberate.
+
+        Single channel images have the opposite problem: without a colormap
+        Matplotlib applies its default ``viridis`` and a greyscale sheet comes
+        out purple and yellow.
+
+        Returns:
+            ``(array, cmap)`` ready for ``imshow``.
+        """
+        image = self._as_uint8(step.image)
+
+        # A 3D array with one channel is still a greyscale image.
+        if image.ndim == 3 and image.shape[2] == 1:
+            image = image[:, :, 0]
+
+        limit = config.STEP_IMAGE_MAX_WIDTH
+        if image.shape[1] > limit:
+            scale = limit / image.shape[1]
+            image = cv2.resize(
+                image,
+                (limit, max(1, int(round(image.shape[0] * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        if image.ndim == 2:
+            return image, step.cmap or "gray"
+        if image.shape[2] == 3:
+            return cv2.cvtColor(image, cv2.COLOR_BGR2RGB), None
+        if image.shape[2] == 4:
+            return cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA), None
+        raise ValueError(
+            f"step {step.name!r}: cannot display an image with "
+            f"{image.shape[2]} channels"
+        )
+
     # -- montage -----------------------------------------------------------
 
     @staticmethod
@@ -244,7 +288,8 @@ class ProgressViewer:
                 axis.axis("off")
                 continue
             step = self._steps[position]
-            axis.imshow(step.image, cmap=step.cmap)
+            image, cmap = self._for_display(step)
+            axis.imshow(image, cmap=cmap)
             axis.set_title(f"{position + 1:02d}  {step.name}", fontsize=9)
             axis.axis("off")
 
