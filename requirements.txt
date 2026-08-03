@@ -1,0 +1,16 @@
+# SAMS dependencies. Unpinned during development; pinned at task T12 from
+# `pip freeze` so the marker gets the exact versions we tested against.
+#
+# Install into a virtual environment. Do not pip install into the system Python
+# on Arch — it is externally managed.
+
+opencv-python
+numpy
+scikit-image
+scipy
+matplotlib
+seaborn
+pandas
+scikit-learn
+pytest
+Pillow
