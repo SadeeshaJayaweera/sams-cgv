@@ -630,6 +630,165 @@ Fill `README.md`: what it is, install, the three commands, folder map, known lim
 
 ---
 
+## 9.2 M2 — Acquisition & Geometry
+
+**Branch** `feat/m2-geometry` · **Owns** `src/io/image_loader.py`, `src/preprocess/deskew.py`, `tests/test_geometry.py`
+**Reads** `ctx["sheet"]` · **Writes** `ctx["bgr"]`, `ctx["warped"]` · **Blocks** M3 and M5
+
+`ctx["warped"]` is the single most important output in the project. Everything downstream reads it.
+
+### What T0 measured that changes your job
+
+- All five photos are **3024 x 4032, upright, and carry no EXIF orientation tag**. Keep the EXIF rotation code — it is one line and phone photos usually do have it — but do not expect it to fire here, and do not let its absence be treated as an error.
+- The paper is photographed on a **pale desk** in every shot. Paper-against-cream is low contrast, so Canny plus largest-contour will fail on some sheets. **The fallback path in T4 is not optional garnish; budget real time for it.**
+- The sheet carries **two tables** — a one-row lecture header table above the student table. Your crop must keep **both**, and must not cut the right hand `Signature` column. M5 decides which table is which; you must not make that decision for them by cropping one away.
+
+### Contract
+
+```python
+# src/io/image_loader.py
+def load_image(path: str | Path) -> np.ndarray:
+    """BGR uint8, EXIF rotation applied. FileNotFoundError if missing,
+    ValueError if not a decodable image. Both with clear messages."""
+
+def resize_to_width(bgr: np.ndarray, width: int = 1600) -> np.ndarray:
+    """Downscale only, never upscale, aspect ratio preserved."""
+
+# src/preprocess/deskew.py
+class GeometryStage(Stage):
+    name = "geometry"
+    def run(self, ctx: dict) -> dict: ...
+
+def find_sheet_corners(bgr) -> np.ndarray | None:
+    """(4, 2) float32, ordered top-left, top-right, bottom-right, bottom-left.
+    None when not found — that is a normal outcome, not an error."""
+
+def four_point_warp(bgr, corners) -> np.ndarray: ...
+def estimate_skew_angle(grey) -> float: ...
+```
+
+`src/config.py` under `# --- M2 geometry ---`:
+
+```python
+TARGET_WIDTH = 1600
+CANNY_LOW, CANNY_HIGH = 50, 150
+MIN_SHEET_AREA_RATIO = 0.30
+MAX_SKEW_CORRECTION_DEG = 15.0
+BORDER_TRIM_PX = 6
+```
+
+### Tasks
+
+**T1 — Loader.** `cv2.imread`, then EXIF orientation via Pillow. Clear errors. Add `resize_to_width` and downscale to `TARGET_WIDTH` — 3024 px wide is four times more than any later stage needs and makes every run slow.
+- `feat(io): add image loader with validation and clear errors`
+- `fix(io): correct EXIF orientation on phone photos`
+- `feat(io): add aspect-preserving downscale helper`
+
+**T2 — Corners, contour method.** Grey → Gaussian blur → Canny → `findContours` → largest → `approxPolyDP` with a tolerance loop until 4 points → order by sum and difference. Reject below `MIN_SHEET_AREA_RATIO`.
+- `feat(preprocess): detect sheet outline with canny and contours`
+- `feat(preprocess): order corner points consistently top-left first`
+- `fix(preprocess): reject contours smaller than minimum area ratio`
+
+**T3 — Perspective warp.** `getPerspectiveTransform` + `warpPerspective`. Output size from the longest opposite edges so the sheet is not squashed.
+- `feat(preprocess): add four point perspective warp to top-down view`
+
+**T4 — Fallback (expect to use it).** No corners → do not crash. Whole image plus a rotation correction from `estimate_skew_angle`: `HoughLinesP`, median angle of near-horizontal lines, clamped to `MAX_SKEW_CORRECTION_DEG`. The table borders are the strongest straight lines on the page, so measure the skew from those rather than the paper edge.
+- `feat(preprocess): add hough based skew angle estimation`
+- `feat(preprocess): fall back to rotation only when corners not detected`
+- `feat(preprocess): log which geometry path was used`
+
+**T5 — Border trim.** Shave `BORDER_TRIM_PX` off each edge after warping so leftover desk does not become a table line for M5.
+- `feat(preprocess): trim residual border after warping`
+
+**T6 — Wrap as a Stage.** `figures()` returns original, edge map, corner overlay, warped.
+- `feat(preprocess): wrap geometry logic in GeometryStage class`
+
+**T7 — All five sheets.** Record which path each used and whether the result is straight. **Verify by eye that both tables and all five columns survive the crop** — that is the acceptance test M5 will hold you to. Tune Canny in `config.py` only.
+- `fix(preprocess): tune canny thresholds for low contrast desk backgrounds`
+- `docs(preprocess): note per-sheet geometry results`
+
+**Verify:** `python sams.py data/sheets/<any>.png data/info.xml --no-show` reaches the summary, and `outputs/steps/<date>/02_warped.png` shows a flat sheet with the full student table.
+
+**Figures:** `m2_original_vs_warped.png`, `m2_corner_detection.png`, `m2_warp_steps.png`, `m2_skew_correction.png`, `m2_all_sheets_grid.png`
+
+---
+
+## 9.3 M3 — Greyscale & Enhancement
+
+**Branch** `feat/m3-enhance` · **Owns** `src/preprocess/enhance.py`, `tests/test_enhance.py`
+**Reads** `ctx["warped"]` · **Writes** `ctx["grey"]` · **Blocks** M4
+
+### What T0 measured that changes your job
+
+- All five sheets are **real colour** — no greyscale sheet to special-case.
+- The photos have visible **paper texture, fold creases and a soft shadow gradient** across the page. Shadow removal (T3) is the task that actually matters here; the greyscale method barely moves the result. Spend your time accordingly, and say so honestly in the report.
+- Your output feeds M4, whose output feeds M5's **line detection**. An enhancement that looks lovely but thins the printed table lines is a bad enhancement. Check with M5, not just with your eyes.
+
+### Contract
+
+```python
+class EnhanceStage(Stage):
+    name = "enhance"
+    def run(self, ctx: dict) -> dict: ...
+
+def to_grey(bgr, method: str = "luminosity") -> np.ndarray:
+    """'average' | 'luminosity' | 'lightness' | 'max_channel'.
+    Write average and luminosity yourself in NumPy, not cv2.cvtColor,
+    so the report can explain 0.299 R + 0.587 G + 0.114 B."""
+
+def denoise(grey, method: str = "bilateral") -> np.ndarray: ...
+def remove_shadow(grey) -> np.ndarray: ...
+def enhance_contrast(grey, method: str = "clahe") -> np.ndarray: ...
+```
+
+Unknown method name raises `ValueError` — never fall through silently to a default.
+
+`src/config.py` under `# --- M3 enhancement ---`:
+
+```python
+GREY_METHOD = "luminosity"
+DENOISE_METHOD = "bilateral"
+BILATERAL_D, BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE = 9, 75, 75
+MEDIAN_KSIZE = 3
+SHADOW_KERNEL = 25
+CLAHE_CLIP, CLAHE_GRID = 2.0, (8, 8)
+```
+
+### Tasks
+
+**T1 — Greyscale, four ways.** `average` and `luminosity` in plain NumPy so you can explain why green dominates (eye sensitivity). Compare all four on one sheet.
+- `feat(preprocess): add average and luminosity greyscale with numpy`
+- `feat(preprocess): add lightness and max-channel greyscale variants`
+- `docs(preprocess): note why luminosity weights differ per channel`
+
+**T2 — Denoise, four ways.** Gaussian, median, bilateral, non-local means. **Measure** PSNR/SSIM and runtime — do not claim bilateral wins, show it.
+- `feat(preprocess): add gaussian and median denoising`
+- `feat(preprocess): add bilateral filter to keep stroke edges sharp`
+- `feat(preprocess): add non-local means denoising option`
+- `test(preprocess): measure psnr and runtime for each denoise method`
+
+**T3 — Shadow removal (the big win).** Dilate with a large kernel then median blur to estimate the lighting map, divide, rescale to 0–255.
+- `feat(preprocess): estimate background lighting with morphology`
+- `feat(preprocess): divide by background to flatten uneven lighting`
+- `fix(preprocess): rescale to full range after shadow division`
+
+**T4 — Contrast.** Global histogram equalisation vs CLAHE, with the histograms shown.
+- `feat(preprocess): add global histogram equalisation`
+- `feat(preprocess): add clahe local contrast enhancement`
+
+**T5 — Wrap as a Stage.** Chain grey → shadow → denoise → contrast, every step switchable from `config.py`. `figures()` returns each intermediate.
+- `feat(preprocess): wrap enhancement chain in EnhanceStage class`
+
+**T6 — Tune with M4 and M5.** Your best-looking image is not always the one that binarises best, and the one that binarises best is not always the one whose table lines survive. Agree final settings with both and write them into `config.py`.
+- `fix(preprocess): tune clahe clip limit after binarisation feedback`
+- `docs(preprocess): record agreed enhancement settings`
+
+**Verify:** `outputs/steps/<date>/03_grey.png` on the sheet with the worst shadow is evenly lit corner to corner.
+
+**Figures:** `m3_greyscale_methods.png`, `m3_histograms.png`, `m3_denoise_comparison.png`, `m3_denoise_metrics.png`, `m3_shadow_removal.png`
+
+---
+
 ## 10. Error handling rules
 
 - User mistakes (missing file, bad index, empty database) → friendly one-line message, `sys.exit(2)`, **no traceback**.
