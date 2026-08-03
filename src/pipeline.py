@@ -15,6 +15,7 @@ from __future__ import annotations
 from src.models import SheetMeta, Student
 from src.utils.logging import get_logger
 from src.utils.stage import Stage
+from src.viz.progress import ProgressViewer
 
 log = get_logger("pipeline")
 
@@ -25,10 +26,13 @@ class Pipeline:
     Args:
         stages: The stages to run, in order. Whether each one is a real module
             or a stub is the caller's business, not the runner's.
+        viewer: Collects the pictures each stage produces. Optional, because a
+            unit test has no interest in them.
     """
 
-    def __init__(self, stages: list[Stage]) -> None:
+    def __init__(self, stages: list[Stage], viewer: ProgressViewer | None = None) -> None:
         self.stages = list(stages)
+        self.viewer = viewer
 
     @property
     def stage_names(self) -> list[str]:
@@ -57,6 +61,25 @@ class Pipeline:
         for position, stage in enumerate(self.stages, start=1):
             log.info("[%d/%d] stage %r starting", position, len(self.stages), stage.name)
             ctx = stage.run(ctx)
+            self._collect_figures(stage)
             log.info("[%d/%d] stage %r done", position, len(self.stages), stage.name)
 
         return ctx
+
+    def _collect_figures(self, stage: Stage) -> None:
+        """Hand a stage's pictures to the viewer, if there is one.
+
+        A stage that produces no figure is normal and silent. A stage whose
+        ``figures()`` raises is a bug in that stage, and it is reported as
+        such rather than being allowed to take the whole run down — the
+        pictures are for the report, the attendance is the product.
+        """
+        if self.viewer is None:
+            return
+        try:
+            figures = stage.figures()
+        except Exception:
+            log.exception("stage %r failed to produce its figures", stage.name)
+            return
+        if figures:
+            self.viewer.add_all(figures)
