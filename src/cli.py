@@ -83,24 +83,48 @@ def optional_import(path: str, attribute: str) -> Callable[..., Any] | None:
     return function
 
 
+def _indices_from_cells() -> list[str]:
+    """Indices inferred from the signature crops already on disk.
+
+    ``outputs/cells/<sheet_date>/<index>.png``. This is the last resort, and
+    the reason it exists is that it depends on nobody: as soon as one sheet has
+    been processed the CLIs can name real students, even if the XML parser and
+    the database are still someone else's unwritten module.
+    """
+    if not config.CELLS.is_dir():
+        return []
+    return sorted(
+        {
+            crop.stem
+            for folder in config.CELLS.iterdir()
+            if folder.is_dir()
+            for crop in folder.glob("*.png")
+        }
+    )
+
+
 def known_indices() -> list[str]:
     """Every student index the project knows about.
 
-    Prefers the database, because that is what the charts read from. Falls back
-    to ``info.xml`` so the command can still be helpful before any sheet has
-    been processed.
+    Three sources, best first: the database, because that is what the charts
+    read from; ``info.xml``, so the command is helpful before any sheet has
+    been processed; and the saved signature crops, so it is helpful even before
+    those two modules exist. The first source that returns anything wins.
     """
     from_db = optional_import("src.io.db", "known_indices")
     if from_db is not None:
-        indices = [str(index) for index in from_db()]
+        indices = sorted({str(index) for index in from_db()})
         if indices:
-            return sorted(set(indices))
+            return indices
 
     parse_students = optional_import("src.io.xml_parser", "parse_students")
     if parse_students is None:
         from src.stubs import parse_students  # STUB — owned by M7
-    students = parse_students(config.INFO_XML)
-    return sorted({student.index for student in students})
+    indices = sorted({student.index for student in parse_students(config.INFO_XML)})
+    if indices:
+        return indices
+
+    return _indices_from_cells()
 
 
 def database_is_empty() -> bool:
