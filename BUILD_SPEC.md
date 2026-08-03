@@ -391,13 +391,14 @@ M1 creates `src/stubs.py` containing a placeholder `Stage` subclass for **every*
 Rules for stubs:
 - Each stub logs `STUB <name>: returning placeholder data`.
 - Each stub writes a **type-correct** value into `ctx` (an empty list, a grey copy, whatever the contract says) so downstream code does not crash.
-- Stubs read from `data/fixtures/` where an image is needed.
+- Stubs read from `data/fixtures/` where an image is needed. The one exception is `bgr`: `GeometryStub` loads the photo the user actually passed on the command line, because faking file loading would make `sams.py <any sheet>` show the same picture for all five sheets and hide real problems such as an unreadable file.
+- `data/fixtures/` is not committed. A stub that needs a fixture and cannot find one falls back to something type-correct, logs a `WARNING` naming `tools/make_fixtures.py`, and keeps the run alive. A fresh clone must reach the summary table without running any tool first.
 - Every stub carries `# STUB — owned by M<N>, delete when their module lands`.
 - A stub is deleted the moment the real module is merged. Stubs must not survive to submission — grep for `STUB` before tagging the release.
 
 | Stub | Writes to ctx |
 |---|---|
-| `GeometryStub` | `bgr`, `warped` ← `fixtures/warped.png` |
+| `GeometryStub` | `bgr` ← the real photo at `sheet.path`; `warped` ← `fixtures/warped.png` |
 | `EnhanceStub` | `grey` ← `cvtColor(warped, BGR2GRAY)` |
 | `BinarizeStub` | `binary` ← Otsu on `grey`, inverted |
 | `TableStub` | `grid=None`, `cells=[]` |
