@@ -154,19 +154,42 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _available_sheets(limit: int = 10) -> list[str]:
+    """Sheet filenames the user could have meant, for a helpful error."""
+    if not config.SHEETS.is_dir():
+        return []
+    return sorted(path.name for path in config.SHEETS.iterdir() if path.is_file())[:limit]
+
+
 def validate_paths(image: Path, xml: Path) -> None:
     """Stop with a clear message if either input is not a readable file.
+
+    A mistyped filename is a user mistake, not a bug, so it gets one line of
+    plain English and a hint — never a traceback. Section 10 of the spec.
 
     Raises:
         SystemExit: With code 2, the conventional exit code for a usage error.
     """
-    for label, path in (("image", image), ("xml", xml)):
-        if not path.exists():
-            print(f"error: no {label} file at {path}")
-            raise SystemExit(2)
-        if not path.is_file():
-            print(f"error: {label} path {path} is not a file")
-            raise SystemExit(2)
+    if not image.is_file():
+        print(f"error: no signing sheet image at {image}")
+        sheets = _available_sheets()
+        if sheets:
+            print("       sheets available in data/sheets:")
+            for name in sheets:
+                print(f"         {name}")
+        else:
+            print(f"       no sheets found in {config.SHEETS} either")
+        raise SystemExit(2)
+
+    if not xml.is_file():
+        print(f"error: no student list at {xml}")
+        if config.INFO_XML.is_file():
+            try:
+                hint = config.INFO_XML.relative_to(Path.cwd())
+            except ValueError:
+                hint = config.INFO_XML
+            print(f"       did you mean {hint} ?")
+        raise SystemExit(2)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,4 +233,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        sys.exit(130)
