@@ -5,7 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO
+from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO, MAX_SKEW_CORRECTION_DEG
+from src.utils.stage import Stage
 
 
 def _order_points(pts: np.ndarray) -> np.ndarray:
@@ -119,3 +120,45 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
         return 0.0
         
     return float(np.median(angles))
+
+
+class GeometryStage(Stage):
+    """Initial fallback implementation of the geometry stage."""
+    name = "geometry"
+
+    def run(self, ctx: dict) -> dict:
+        bgr = ctx.get("bgr")
+        if bgr is None:
+            return ctx
+            
+        corners = find_sheet_corners(bgr)
+        
+        if corners is not None:
+            warped = four_point_warp(bgr, corners)
+        else:
+            # Fallback path: use full image and rotate by estimated skew angle
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            angle = estimate_skew_angle(gray)
+            
+            # Clamp the result to +/- MAX_SKEW_CORRECTION_DEG
+            angle = max(-MAX_SKEW_CORRECTION_DEG, min(MAX_SKEW_CORRECTION_DEG, angle))
+            
+            h, w = bgr.shape[:2]
+            center = (w / 2, h / 2)
+            
+            # Get OpenCV rotation matrix
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            
+            # Expand the canvas so nothing is cut off
+            cos = np.abs(M[0, 0])
+            sin = np.abs(M[0, 1])
+            new_w = int((h * sin) + (w * cos))
+            new_h = int((h * cos) + (w * sin))
+            
+            M[0, 2] += (new_w / 2) - center[0]
+            M[1, 2] += (new_h / 2) - center[1]
+            
+            warped = cv2.warpAffine(bgr, M, (new_w, new_h))
+            
+        ctx["warped"] = warped
+        return ctx
