@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from src.config import CANNY_LOW, CANNY_HIGH
+from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO
 
 
 def _order_points(pts: np.ndarray) -> np.ndarray:
@@ -39,16 +39,28 @@ def find_sheet_corners(bgr: np.ndarray) -> np.ndarray | None:
     if not contours:
         return None
         
-    largest_contour = max(contours, key=cv2.contourArea)
-    perimeter = cv2.arcLength(largest_contour, True)
+    full_area = bgr.shape[0] * bgr.shape[1]
     
-    # Tolerance loop starting near 0.02 * perimeter to find exactly 4 points
-    for factor in np.linspace(0.01, 0.1, 100):
-        epsilon = factor * perimeter
-        approx = cv2.approxPolyDP(largest_contour, epsilon, True)
+    # Sort contours by area descending so we try the largest ones first
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    
+    for contour in contours:
+        perimeter = cv2.arcLength(contour, True)
         
-        if len(approx) == 4:
-            pts = approx.reshape((4, 2)).astype(np.float32)
-            return _order_points(pts)
+        # Tolerance loop starting near 0.02 * perimeter to find exactly 4 points
+        for factor in np.linspace(0.01, 0.1, 100):
+            epsilon = factor * perimeter
+            approx = cv2.approxPolyDP(contour, epsilon, True)
             
+            if len(approx) == 4:
+                area = cv2.contourArea(approx)
+                # If the area is >= MIN_SHEET_AREA_RATIO, we've found our sheet
+                if (area / full_area) >= MIN_SHEET_AREA_RATIO:
+                    pts = approx.reshape((4, 2)).astype(np.float32)
+                    return _order_points(pts)
+                
+                # If this 4-point approximation is too small, stop trying epsilons
+                # for this particular contour and move to the next largest contour candidate.
+                break
+                
     return None
