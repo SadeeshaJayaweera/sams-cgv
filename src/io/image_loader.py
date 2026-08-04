@@ -7,6 +7,8 @@ import numpy as np
 from pathlib import Path
 from PIL import Image, ImageOps
 
+from src.config import TARGET_WIDTH
+
 
 def load_image(path: str | Path) -> np.ndarray:
     """BGR uint8, EXIF rotation applied. FileNotFoundError if missing,
@@ -48,3 +50,26 @@ def load_image(path: str | Path) -> np.ndarray:
         return bgr_array
     except Exception as e:
         raise ValueError(f"File exists but is not a decodable image: {resolved_path}") from e
+
+
+def resize_to_width(bgr: np.ndarray, width: int = TARGET_WIDTH) -> np.ndarray:
+    """Downscale only, never upscale, aspect ratio preserved.
+
+    Args:
+        bgr: The original image as a NumPy array.
+        width: The target width in pixels. Defaults to src.config.TARGET_WIDTH.
+
+    Returns:
+        The downscaled image, or the original image if it is already narrower than or equal to `width`.
+    """
+    h, w = bgr.shape[:2]
+    
+    # If the image is already narrower than or equal to `width`, return unchanged (never upscale)
+    if w <= width:
+        return bgr
+        
+    ratio = width / w
+    new_h = int(h * ratio)
+    
+    # cv2.resize with INTER_AREA
+    return cv2.resize(bgr, (width, new_h), interpolation=cv2.INTER_AREA)
