@@ -90,3 +90,32 @@ def four_point_warp(bgr: np.ndarray, corners: np.ndarray) -> np.ndarray:
 
     M = cv2.getPerspectiveTransform(corners, dst)
     return cv2.warpPerspective(bgr, M, (max_width, max_height))
+
+
+def estimate_skew_angle(grey: np.ndarray) -> float:
+    """Small residual rotation in degrees, from Hough lines or minAreaRect."""
+    edges = cv2.Canny(grey, CANNY_LOW, CANNY_HIGH)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=50, maxLineGap=10)
+    
+    if lines is None:
+        return 0.0
+        
+    angles = []
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        
+        # Normalize angle to [-90, 90] range
+        if angle > 90:
+            angle -= 180
+        elif angle < -90:
+            angle += 180
+            
+        # Filter for near-horizontal segments (+/- 30 degrees)
+        if -30.0 <= angle <= 30.0:
+            angles.append(angle)
+            
+    if not angles:
+        return 0.0
+        
+    return float(np.median(angles))
