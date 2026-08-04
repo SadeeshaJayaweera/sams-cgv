@@ -64,3 +64,29 @@ def find_sheet_corners(bgr: np.ndarray) -> np.ndarray | None:
                 break
                 
     return None
+
+
+def four_point_warp(bgr: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Perspective transform to a straight top-down view."""
+    tl, tr, br, bl = corners
+
+    # Calculate output width as max of top or bottom edge lengths
+    width_top = np.linalg.norm(tr - tl)
+    width_bottom = np.linalg.norm(br - bl)
+    max_width = int(max(width_top, width_bottom))
+
+    # Calculate output height as max of left or right edge lengths
+    height_left = np.linalg.norm(bl - tl)
+    height_right = np.linalg.norm(br - tr)
+    max_height = int(max(height_left, height_right))
+
+    # Construct the destination points to map to
+    dst = np.array([
+        [0, 0],
+        [max_width - 1, 0],
+        [max_width - 1, max_height - 1],
+        [0, max_height - 1]
+    ], dtype=np.float32)
+
+    M = cv2.getPerspectiveTransform(corners, dst)
+    return cv2.warpPerspective(bgr, M, (max_width, max_height))
