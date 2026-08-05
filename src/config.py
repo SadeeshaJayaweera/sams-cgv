@@ -83,6 +83,26 @@ many verdicts are worth checking by eye.
 
 # --- M2 geometry ---
 
+TARGET_WIDTH = 1600
+"""Photos are downscaled to this width before any geometry work.
+
+The source sheets are 3024 px wide. Nothing downstream needs that, and every
+stage pays for it.
+"""
+
+CANNY_LOW, CANNY_HIGH = 50, 150
+"""Hysteresis thresholds for the sheet outline edge map."""
+
+MIN_SHEET_AREA_RATIO = 0.30
+"""A candidate outline must fill at least this fraction of the photo."""
+
+MAX_SKEW_CORRECTION_DEG = 15.0
+"""Rotation is clamped to this. A larger estimate means the detection is wrong."""
+
+BORDER_TRIM_PX = 6
+"""Pixels shaved off each edge after warping, so leftover desk does not
+become a table line for M5. Not applied yet — M2 task T5."""
+
 # --- M3 enhancement ---
 
 # --- M4 binarisation ---
