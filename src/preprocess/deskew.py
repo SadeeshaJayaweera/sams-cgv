@@ -5,7 +5,14 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO, MAX_SKEW_CORRECTION_DEG
+from src.config import (
+    CANNY_LOW,
+    CANNY_HIGH,
+    MIN_SHEET_AREA_RATIO,
+    MAX_SKEW_CORRECTION_DEG,
+    BORDER_TRIM_PX,
+)
+from src.io.image_loader import load_image, resize_to_width
 from src.utils.stage import Stage
 
 
@@ -122,22 +129,43 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
     return float(np.median(angles))
 
 
+def _trim_border(img: np.ndarray, px: int = BORDER_TRIM_PX) -> np.ndarray:
+    """Trim a fixed number of pixels from all four edges."""
+    h, w = img.shape[:2]
+    if h <= 2 * px or w <= 2 * px:
+        return img
+    return img[px:h-px, px:w-px]
+
+
 class GeometryStage(Stage):
     """Initial fallback implementation of the geometry stage."""
     name = "geometry"
 
     def run(self, ctx: dict) -> dict:
-        bgr = ctx.get("bgr")
-        if bgr is None:
-            return ctx
-            
+        sheet = ctx["sheet"]
+        
+        # 1. Load the image
+        bgr_full = load_image(sheet.path)
+        
+        # 2. Resize and store
+        bgr = resize_to_width(bgr_full)
+        ctx["bgr"] = bgr
+        self._original = bgr.copy()
+        
+        # Compute edges for both estimation and figures
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        self._edges = cv2.Canny(blurred, CANNY_LOW, CANNY_HIGH)
+        
+        # 3. Attempt to find corners and warp
         corners = find_sheet_corners(bgr)
+        self._corners = corners
         
         if corners is not None:
             warped = four_point_warp(bgr, corners)
         else:
             # Fallback path: use full image and rotate by estimated skew angle
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            # Reusing the computed gray edges for skew estimation
             angle = estimate_skew_angle(gray)
             
             # Clamp the result to +/- MAX_SKEW_CORRECTION_DEG
@@ -160,5 +188,29 @@ class GeometryStage(Stage):
             
             warped = cv2.warpAffine(bgr, M, (new_w, new_h))
             
+        warped = _trim_border(warped)
+        
+        # 4. Store the final result
         ctx["warped"] = warped
+        self._warped = warped.copy()
+        
+        # 5. Return ctx
         return ctx
+
+    def figures(self) -> dict[str, np.ndarray]:
+        if not hasattr(self, "_original"):
+            return {}
+            
+        overlay = self._original.copy()
+        if getattr(self, "_corners", None) is not None:
+            pts = self._corners.astype(int).reshape((-1, 1, 2))
+            cv2.polylines(overlay, [pts], True, (0, 255, 0), 2)
+            for pt in self._corners:
+                cv2.circle(overlay, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
+                
+        return {
+            "original": self._original,
+            "edge map": self._edges,
+            "corner overlay": overlay,
+            "warped result": self._warped,
+        }
