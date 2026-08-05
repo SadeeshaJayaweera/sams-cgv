@@ -47,31 +47,19 @@ def find_sheet_corners(bgr: np.ndarray) -> np.ndarray | None:
     if not contours:
         return None
         
-    full_area = bgr.shape[0] * bgr.shape[1]
+    largest_contour = max(contours, key=cv2.contourArea)
+    perimeter = cv2.arcLength(largest_contour, True)
     
-    # Sort contours by area descending so we try the largest ones first
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    
-    for contour in contours:
-        perimeter = cv2.arcLength(contour, True)
+    # Tolerance loop starting near 0.02 * perimeter to find exactly 4 points
+    for factor in np.linspace(0.01, 0.1, 100):
+        epsilon = factor * perimeter
+        approx = cv2.approxPolyDP(largest_contour, epsilon, True)
         
-        # Tolerance loop starting near 0.02 * perimeter to find exactly 4 points
-        for factor in np.linspace(0.01, 0.1, 100):
-            epsilon = factor * perimeter
-            approx = cv2.approxPolyDP(contour, epsilon, True)
+        if len(approx) == 4:
+            return approx.reshape((4, 2)).astype(np.float32)
             
-            if len(approx) == 4:
-                area = cv2.contourArea(approx)
-                # If the area is >= MIN_SHEET_AREA_RATIO, we've found our sheet
-                if (area / full_area) >= MIN_SHEET_AREA_RATIO:
-                    pts = approx.reshape((4, 2)).astype(np.float32)
-                    return _order_points(pts)
-                
-                # If this 4-point approximation is too small, stop trying epsilons
-                # for this particular contour and move to the next largest contour candidate.
-                break
-                
     return None
+
 
 
 def four_point_warp(bgr: np.ndarray, corners: np.ndarray) -> np.ndarray:
@@ -110,7 +98,8 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
         
     angles = []
     for line in lines:
-        x1, y1, x2, y2 = line[0]
+        pts = line[0] if line.ndim == 2 else line
+        x1, y1, x2, y2 = pts
         angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
         
         # Normalize angle to [-90, 90] range

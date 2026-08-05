@@ -16,21 +16,6 @@ from src.preprocess.deskew import (
 from src.models import SheetMeta
 
 
-@pytest.fixture(autouse=True)
-def mock_houghlines_shape(monkeypatch):
-    """
-    OpenCV 5 cv2.HoughLinesP returns (N, 4), but deskew.py expects (N, 1, 4).
-    Mock it to avoid modifying deskew.py in this commit.
-    """
-    original_hough = cv2.HoughLinesP
-    def mocked_hough(*args, **kwargs):
-        res = original_hough(*args, **kwargs)
-        if res is not None and len(res.shape) == 2:
-            res = res.reshape(res.shape[0], 1, res.shape[1])
-        return res
-    monkeypatch.setattr(cv2, "HoughLinesP", mocked_hough)
-
-
 def test_load_image_exceptions():
     """1. load_image raises FileNotFoundError on bad path, ValueError on non-image file."""
     with pytest.raises(FileNotFoundError):
@@ -144,6 +129,7 @@ def test_corner_ordering():
 def test_fallback_path_random_noise():
     """5. Fallback path triggers and does not crash on pure random noise as input."""
     # Create random noise image and save to temporary file
+    np.random.seed(42)
     noise = np.random.randint(0, 256, (600, 800, 3), dtype=np.uint8)
     
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
