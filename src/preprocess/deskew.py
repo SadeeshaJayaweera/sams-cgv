@@ -98,7 +98,8 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
         
     angles = []
     for line in lines:
-        x1, y1, x2, y2 = line[0]
+        pts = line[0] if line.ndim == 2 else line
+        x1, y1, x2, y2 = pts
         angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
         
         # Normalize angle to [-90, 90] range
