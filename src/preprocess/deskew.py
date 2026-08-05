@@ -102,9 +102,11 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
         return 0.0
         
     angles = []
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+    # OpenCV 4 returns (N, 1, 4) here and OpenCV 5 returns (N, 4). We pin
+    # opencv-python 5, where indexing line[0] yields a single int and unpacking
+    # it raises. Reshaping first works on both.
+    for x1, y1, x2, y2 in lines.reshape(-1, 4):
+        angle = np.degrees(np.arctan2(float(y2 - y1), float(x2 - x1)))
         
         # Normalize angle to [-90, 90] range
         if angle > 90:
