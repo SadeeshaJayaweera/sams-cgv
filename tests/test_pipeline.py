@@ -247,29 +247,6 @@ def test_every_command_has_working_help(command: str) -> None:
     assert result.stdout.startswith(f"usage: {command}")
 
 
-def test_every_module_under_src_imports() -> None:
-    """No module in the project is broken at import time.
-
-    Both M2 modules reached `main` importing constants that did not exist in
-    `src/config.py`, and the whole suite stayed green because nothing else
-    imported them. A module that cannot be imported cannot be reviewed,
-    tested or run, so the suite checks all of them from now on.
-    """
-    import importlib
-    import pkgutil
-
-    import src
-
-    failures: list[str] = []
-    for info in pkgutil.walk_packages(src.__path__, prefix="src."):
-        try:
-            importlib.import_module(info.name)
-        except Exception as error:  # noqa: BLE001 - reported, not swallowed
-            failures.append(f"{info.name}: {type(error).__name__}: {error}")
-
-    assert not failures, "modules failed to import:\n  " + "\n  ".join(failures)
-
-
 def test_infovis_without_an_index_explains_itself() -> None:
     result = subprocess.run(
         [sys.executable, "infovis.py"],

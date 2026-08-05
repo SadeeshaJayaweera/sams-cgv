@@ -55,6 +55,49 @@ class _Stub(Stage):
         return image
 
 
+# STUB — owned by M2, delete when their module lands
+class GeometryStub(_Stub):
+    """Stands in for acquisition and perspective correction.
+
+    Loads the photo the user actually asked for, then fakes the flattening
+    step with the hand-cropped fixture. If the fixture is missing the raw
+    photo is passed through unchanged, which is wrong but keeps the run alive.
+    """
+
+    name = "geometry"
+    owner = "M2"
+
+    def __init__(self) -> None:
+        self._bgr: np.ndarray | None = None
+        self._warped: np.ndarray | None = None
+
+    def run(self, ctx: dict) -> dict:
+        self.announce()
+        sheet = ctx["sheet"]
+
+        bgr = cv2.imread(str(sheet.path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise ValueError(f"OpenCV could not read the sheet image {sheet.path}")
+
+        warped = self._fixture("warped.png")
+        if warped is None:
+            log.warning("no warped fixture, passing the raw photo through unflattened")
+            warped = bgr.copy()
+
+        ctx["bgr"] = bgr
+        ctx["warped"] = warped
+        self._bgr, self._warped = bgr, warped
+        return ctx
+
+    def figures(self) -> dict[str, np.ndarray]:
+        figures: dict[str, np.ndarray] = {}
+        if self._bgr is not None:
+            figures["original"] = self._bgr
+        if self._warped is not None:
+            figures["warped"] = self._warped
+        return figures
+
+
 # STUB — owned by M3, delete when their module lands
 class EnhanceStub(_Stub):
     """Stands in for shadow removal and contrast enhancement.
