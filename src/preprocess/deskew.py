@@ -5,7 +5,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO, MAX_SKEW_CORRECTION_DEG
+from src.config import (
+    CANNY_LOW,
+    CANNY_HIGH,
+    MIN_SHEET_AREA_RATIO,
+    MAX_SKEW_CORRECTION_DEG,
+    BORDER_TRIM_PX,
+)
 from src.utils.stage import Stage
 
 
@@ -122,6 +128,14 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
     return float(np.median(angles))
 
 
+def _trim_border(img: np.ndarray, px: int = BORDER_TRIM_PX) -> np.ndarray:
+    """Trim a fixed number of pixels from all four edges."""
+    h, w = img.shape[:2]
+    if h <= 2 * px or w <= 2 * px:
+        return img
+    return img[px:h-px, px:w-px]
+
+
 class GeometryStage(Stage):
     """Initial fallback implementation of the geometry stage."""
     name = "geometry"
@@ -160,5 +174,5 @@ class GeometryStage(Stage):
             
             warped = cv2.warpAffine(bgr, M, (new_w, new_h))
             
-        ctx["warped"] = warped
+        ctx["warped"] = _trim_border(warped)
         return ctx
