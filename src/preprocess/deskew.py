@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from src.config import CANNY_LOW, CANNY_HIGH, MIN_SHEET_AREA_RATIO, MAX_SKEW_CORRECTION_DEG
+from src.io.image_loader import load_image, resize_to_width
 from src.utils.stage import Stage
 
 
@@ -125,16 +126,25 @@ def estimate_skew_angle(grey: np.ndarray) -> float:
 
 
 class GeometryStage(Stage):
-    """Initial fallback implementation of the geometry stage."""
+    """Load the sheet photo and flatten it to a top-down view."""
     name = "geometry"
 
+    def __init__(self) -> None:
+        self._bgr: np.ndarray | None = None
+        self._warped: np.ndarray | None = None
+
     def run(self, ctx: dict) -> dict:
-        bgr = ctx.get("bgr")
-        if bgr is None:
-            return ctx
-            
+        # Per BUILD_SPEC.md section 6.3 this stage is the one that *writes*
+        # bgr — it is first in the pipeline, so there is nobody upstream to
+        # read it from. It loads from ctx["sheet"] and lets a bad path raise:
+        # a silent `return ctx` here leaves "warped" unset and the next stage
+        # dies somewhere unrelated (section 2, never swallow an error).
+        sheet = ctx["sheet"]
+        bgr = resize_to_width(load_image(sheet.path))
+        ctx["bgr"] = bgr
+
         corners = find_sheet_corners(bgr)
-        
+
         if corners is not None:
             warped = four_point_warp(bgr, corners)
         else:
@@ -161,6 +171,21 @@ class GeometryStage(Stage):
             M[1, 2] += (new_h / 2) - center[1]
             
             warped = cv2.warpAffine(bgr, M, (new_w, new_h))
-            
+
         ctx["warped"] = warped
+        self._bgr, self._warped = bgr, warped
         return ctx
+
+    def figures(self) -> dict[str, np.ndarray]:
+        """Feed the original and the flattened sheet to M1's progress viewer.
+
+        M2 task T6 also asks for the edge map and the corner overlay — those
+        are still to come. This is the minimum that keeps the montage showing
+        every stage.
+        """
+        figures: dict[str, np.ndarray] = {}
+        if self._bgr is not None:
+            figures["original"] = self._bgr
+        if self._warped is not None:
+            figures["warped"] = self._warped
+        return figures
